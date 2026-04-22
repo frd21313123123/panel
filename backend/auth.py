@@ -27,6 +27,8 @@ def verify_password(p: str, h: str) -> bool:
 
 def create_token(data: dict) -> str:
     payload = data.copy()
+    if "sub" in payload:
+        payload["sub"] = str(payload["sub"])  # jose requires sub as string
     payload["exp"] = datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS)
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -52,7 +54,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     payload = decode_token(token)
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
-    user = db.query(User).filter(User.id == payload.get("sub")).first()
+    user = db.query(User).filter(User.id == int(payload.get("sub"))).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
