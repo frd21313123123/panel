@@ -193,7 +193,8 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
         raise HTTPException(401, "Invalid credentials")
     token = auth.create_token({"sub": u.id, "username": u.username})
     resp = JSONResponse({"token": token, "username": u.username, "is_admin": u.is_admin})
-    resp.set_cookie("panel_token", token, httponly=True, max_age=60 * 60 * 24 * 7, samesite="lax")
+    resp.set_cookie("panel_token", token, httponly=True, max_age=60 * 60 * 24 * 7,
+                    samesite="lax", secure=True)
     return resp
 
 
