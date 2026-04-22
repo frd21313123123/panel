@@ -3,8 +3,20 @@ from pathlib import Path
 from typing import List
 from fastapi import HTTPException
 import shutil
+import tarfile
+import zipfile
 
 from docker_manager import server_dir
+
+ARCHIVE_EXTS = {
+    ".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
+    ".tar.xz", ".txz", ".tar.zst", ".gz", ".bz2",
+}
+
+
+def is_archive(name: str) -> bool:
+    n = name.lower()
+    return any(n.endswith(e) for e in ARCHIVE_EXTS)
 
 
 def _safe(server_id: int, rel: str) -> Path:
@@ -76,3 +88,78 @@ def rename_path(server_id: int, rel: str, new_rel: str):
         raise HTTPException(404, "Not found")
     dst.parent.mkdir(parents=True, exist_ok=True)
     src.rename(dst)
+
+
+def extract_archive(server_id: int, rel: str, dest_rel: str = "") -> int:
+    """Распаковывает архив в dest_rel (по умолчанию — в ту же папку где архив).
+    Возвращает количество извлечённых файлов.
+    Все пути внутри архива проверяются на path-traversal."""
+    src = _safe(server_id, rel)
+    if not src.exists() or not src.is_file():
+        raise HTTPException(404, "Archive not found")
+
+    root = server_dir(server_id).resolve()
+
+    # Папка назначения
+    if dest_rel:
+        dest = _safe(server_id, dest_rel)
+    else:
+        dest = src.parent
+
+    dest.mkdir(parents=True, exist_ok=True)
+
+    name = src.name.lower()
+    count = 0
+
+    def safe_dest(member_path: str) -> Path:
+        """Защита от zip-slip."""
+        target = (dest / member_path).resolve()
+        if not str(target).startswith(str(root)):
+            raise HTTPException(400, f"Unsafe path in archive: {member_path}")
+        return target
+
+    if name.endswith(".zip"):
+        with zipfile.ZipFile(src, "r") as zf:
+            for member in zf.infolist():
+                out = safe_dest(member.filename)
+                if member.filename.endswith("/"):
+                    out.mkdir(parents=True, exist_ok=True)
+                else:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as sf, open(out, "wb") as df:
+                        shutil.copyfileobj(sf, df)
+                    count += 1
+
+    elif any(name.endswith(e) for e in (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar.zst")):
+        mode = "r:*"
+        with tarfile.open(src, mode) as tf:
+            for member in tf.getmembers():
+                out = safe_dest(member.name)
+                if member.isdir():
+                    out.mkdir(parents=True, exist_ok=True)
+                elif member.isfile():
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with tf.extractfile(member) as sf, open(out, "wb") as df:
+                        shutil.copyfileobj(sf, df)
+                    count += 1
+
+    elif name.endswith(".gz"):
+        import gzip
+        out_name = src.stem  # strip .gz
+        out = safe_dest(out_name)
+        with gzip.open(src, "rb") as sf, open(out, "wb") as df:
+            shutil.copyfileobj(sf, df)
+        count = 1
+
+    elif name.endswith(".bz2"):
+        import bz2
+        out_name = src.stem
+        out = safe_dest(out_name)
+        with bz2.open(src, "rb") as sf, open(out, "wb") as df:
+            shutil.copyfileobj(sf, df)
+        count = 1
+
+    else:
+        raise HTTPException(400, f"Unsupported archive format: {src.name}")
+
+    return count

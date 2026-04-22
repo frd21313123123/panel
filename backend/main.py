@@ -451,6 +451,19 @@ def rename(sid: int, body: RenameIn, db: Session = Depends(get_db), user: User =
     return {"ok": True}
 
 
+class ExtractIn(BaseModel):
+    path: str
+    dest: str = ""
+
+
+@app.post("/api/servers/{sid}/files/extract")
+def extract(sid: int, body: ExtractIn, db: Session = Depends(get_db),
+            user: User = Depends(auth.get_current_user)):
+    s = _server_for(db, sid, user, "files")
+    count = fs.extract_archive(s.id, body.path, body.dest)
+    return {"ok": True, "files_extracted": count}
+
+
 # ---------- Users Admin ----------
 @app.get("/api/users")
 def list_users(db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):

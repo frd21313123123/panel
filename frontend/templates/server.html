@@ -278,6 +278,9 @@ function escAttr(s){return String(s||'').replace(/'/g,"\\'");}
 function parentPath(p){const i=p.lastIndexOf("/");return i<0?"":p.slice(0,i);}
 function renderCrumb(p){if(!p)return "/";let acc="";return "/ "+p.split("/").map(x=>{acc=acc?acc+"/"+x:x;return `<a onclick="loadFiles('${escAttr(acc)}')">${escapeHtml(x)}</a>`;}).join(" / ");}
 
+const ARCHIVE_EXTS = ['.zip','.tar','.tar.gz','.tgz','.tar.bz2','.tbz2','.tar.xz','.txz','.gz','.bz2'];
+function isArchive(name){ const n = name.toLowerCase(); return ARCHIVE_EXTS.some(e => n.endsWith(e)); }
+
 async function loadFiles(path) {
   curPath = path;
   const r = await api.get(`/api/servers/${SID}/files?path=${encodeURIComponent(path)}`);
@@ -287,16 +290,28 @@ async function loadFiles(path) {
   if (path) list.innerHTML += `<div class="file-row" onclick="loadFiles('${escAttr(parentPath(path))}')"><span class="icon">↩</span><span class="name">..</span></div>`;
   r.items.forEach(it => {
     const full = path ? path + "/" + it.name : it.name;
+    const archive = !it.is_dir && isArchive(it.name);
     list.innerHTML += `<div class="file-row">
-      <span class="icon">${it.is_dir?'📁':'📄'}</span>
+      <span class="icon">${it.is_dir?'📁':archive?'📦':'📄'}</span>
       <span class="name" onclick="${it.is_dir?`loadFiles('${escAttr(full)}')`:`editFile('${escAttr(full)}')`}">${escapeHtml(it.name)}</span>
       <span class="size">${it.is_dir?'':fmtBytes(it.size)}</span>
       <span class="actions">
+        ${archive?`<button class="btn btn-secondary" title="Распаковать" onclick="extractFile('${escAttr(full)}')">📂 Распаковать</button>`:''}
         ${it.is_dir?'':`<button class="btn btn-secondary" onclick="dlFile('${escAttr(full)}')">⬇</button>`}
         <button class="btn btn-danger" onclick="delFile('${escAttr(full)}')">×</button>
       </span>
     </div>`;
   });
+}
+
+async function extractFile(path) {
+  const destInput = prompt(`Распаковать «${path}» в папку (оставь пустым — рядом с архивом):`, "");
+  if (destInput === null) return; // отмена
+  try {
+    const r = await api.post(`/api/servers/${SID}/files/extract`, { path, dest: destInput });
+    toast(`Распаковано файлов: ${r.files_extracted}`, "success");
+    loadFiles(curPath);
+  } catch(e) { toast(e.message, "error"); }
 }
 async function editFile(path){
   const r = await api.get(`/api/servers/${SID}/files/read?path=${encodeURIComponent(path)}`);
