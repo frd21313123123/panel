@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Серверы</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/admin">⚙️ Администрирование</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <h1>Серверы</h1>
+      <button class="btn btn-primary" onclick="openCreate()">+ Создать сервер</button>
+    </div>
+    <div id="list" class="grid"></div>
+  </main>
+</div>
+
+<div id="modal"></div>
+
+<script src="/static/js/app.js"></script>
+<script>
+loadSidebar("/dashboard");
+
+async function load() {
+  const list = document.getElementById("list");
+  list.innerHTML = '<div class="muted">Загрузка…</div>';
+  try {
+    const servers = await api.get("/api/servers");
+    if (!servers.length) {
+      list.innerHTML = '<div class="card muted">Серверов пока нет. Нажмите «Создать сервер».</div>';
+      return;
+    }
+    list.innerHTML = servers.map(s => `
+      <a href="/servers/${s.id}" class="card" style="display:block;color:inherit;text-decoration:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <h3>${escapeHtml(s.name)}</h3>
+          <span class="pill ${s.status}">${s.status}</span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">
+          ${s.egg ? escapeHtml(s.egg.name) : '—'} · ${s.egg ? escapeHtml(s.egg.docker_image) : ''}
+        </div>
+        <div style="display:flex;gap:14px;font-size:12px;" class="muted">
+          <span>RAM: ${s.memory_mb} MB</span>
+          <span>CPU: ${s.cpu_limit}%</span>
+          <span>Disk: ${s.disk_mb} MB</span>
+        </div>
+      </a>
+    `).join("");
+  } catch (e) { toast(e.message, "error"); }
+}
+
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function openCreate() {
+  const eggs = await api.get("/api/eggs");
+  document.getElementById("modal").innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <h2>Новый сервер</h2>
+        <form id="createForm">
+          <div class="form-group"><label>Название</label><input name="name" required></div>
+          <div class="form-group"><label>Шаблон (egg)</label>
+            <select name="egg_id" required>
+              ${eggs.map(e => `<option value="${e.id}">${escapeHtml(e.name)} — ${escapeHtml(e.docker_image)}</option>`).join("")}
+            </select>
+          </div>
+          <div class="form-group"><label>RAM (MB)</label><input name="memory_mb" type="number" value="512" min="64"></div>
+          <div class="form-group"><label>CPU лимит (%)</label><input name="cpu_limit" type="number" value="100" min="10" max="800"></div>
+          <div class="form-group"><label>Disk (MB)</label><input name="disk_mb" type="number" value="1024" min="64"></div>
+          <div class="form-group"><label>Команда запуска (опционально)</label><input name="startup_cmd" placeholder="используется команда из шаблона"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+            <button class="btn btn-primary">Создать</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  document.getElementById("createForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api.post("/api/servers", {
+        name: fd.get("name"),
+        egg_id: parseInt(fd.get("egg_id")),
+        memory_mb: parseInt(fd.get("memory_mb")),
+        cpu_limit: parseInt(fd.get("cpu_limit")),
+        disk_mb: parseInt(fd.get("disk_mb")),
+        startup_cmd: fd.get("startup_cmd") || "",
+      });
+      closeModal();
+      toast("Сервер создан", "success");
+      load();
+    } catch (err) { toast(err.message, "error"); }
+  });
+}
+
+function closeModal() { document.getElementById("modal").innerHTML = ""; }
+
+load();
+</script>
+</body>
+</html>

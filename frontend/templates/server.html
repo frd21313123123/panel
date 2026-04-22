@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Сервер</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/admin">⚙️ Администрирование</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <h1 id="srvName">Сервер</h1>
+      <span id="srvStatus" class="pill offline">offline</span>
+    </div>
+
+    <div class="card">
+      <div class="power-row">
+        <button class="btn btn-success" onclick="power('start')">▶ Запустить</button>
+        <button class="btn btn-warn" onclick="power('restart')">↻ Рестарт</button>
+        <button class="btn btn-secondary" onclick="power('stop')">■ Стоп</button>
+        <button class="btn btn-danger" onclick="power('kill')">✕ Kill</button>
+        <button class="btn btn-secondary" onclick="power('rebuild')">🔧 Пересоздать</button>
+        <span class="right"></span>
+        <button class="btn btn-danger" onclick="deleteServer()">🗑 Удалить сервер</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="stat-grid">
+        <div class="stat"><div class="label">CPU</div><div class="value" id="stCpu">—</div></div>
+        <div class="stat"><div class="label">Memory</div><div class="value" id="stMem">—</div></div>
+        <div class="stat"><div class="label">Status</div><div class="value" id="stStatus">—</div></div>
+        <div class="stat"><div class="label">Egg</div><div class="value" id="stEgg" style="font-size:14px">—</div></div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="console">Консоль</div>
+      <div class="tab" data-tab="files">Файлы</div>
+      <div class="tab" data-tab="backups">Бэкапы</div>
+      <div class="tab" data-tab="schedules">Расписание</div>
+      <div class="tab" data-tab="subusers">Субпользователи</div>
+      <div class="tab" data-tab="network">Сеть / Env</div>
+      <div class="tab" data-tab="settings">Настройки</div>
+    </div>
+
+    <div id="tab-console">
+      <div class="card">
+        <div id="term" style="height:480px;background:#000;padding:6px;border-radius:4px;"></div>
+        <div style="margin-top:8px;" class="muted">Интерактивный TTY через docker exec. Запусти сервер и подключись.</div>
+        <div style="margin-top:8px;">
+          <button class="btn btn-secondary" onclick="connectTerm('/bin/sh')">Подключить sh</button>
+          <button class="btn btn-secondary" onclick="connectTerm('/bin/bash')">Подключить bash</button>
+          <button class="btn btn-secondary" onclick="disconnectTerm()">Отключить</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-files" style="display:none">
+      <div class="card">
+        <div class="breadcrumb" id="crumb"></div>
+        <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="newFile()">+ Файл</button>
+          <button class="btn btn-secondary" onclick="newDir()">+ Папка</button>
+          <label class="btn btn-secondary" style="cursor:pointer;">
+            ⬆ Загрузить <input type="file" id="uploadInput" style="display:none" onchange="doUpload(event)">
+          </label>
+        </div>
+        <div id="filesList"></div>
+      </div>
+      <div class="card" id="editorCard" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <strong id="editFileName"></strong>
+          <div>
+            <button class="btn btn-primary" onclick="saveEdit()">Сохранить</button>
+            <button class="btn btn-secondary" onclick="closeEdit()">Закрыть</button>
+          </div>
+        </div>
+        <textarea id="editor" style="height:400px;"></textarea>
+      </div>
+    </div>
+
+    <div id="tab-backups" style="display:none">
+      <div class="card">
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <input id="backupName" placeholder="Название бэкапа" value="backup">
+          <button class="btn btn-primary" onclick="createBackup()">Создать</button>
+        </div>
+        <table id="backupsList"><thead><tr><th>Имя</th><th>Файл</th><th>Размер</th><th>Дата</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-schedules" style="display:none">
+      <div class="card">
+        <h3>Новое расписание</h3>
+        <form id="schedForm" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+          <input name="name" placeholder="Название" required>
+          <input name="cron" placeholder="Cron: m h dom mon dow (например: 0 * * * *)" required>
+          <select name="action">
+            <option value="command">Команда в контейнере</option>
+            <option value="restart">Рестарт</option>
+            <option value="stop">Стоп</option>
+            <option value="start">Старт</option>
+          </select>
+          <input name="payload" placeholder="Команда (для action=command)">
+          <button class="btn btn-primary" style="grid-column:1/3">Добавить</button>
+        </form>
+      </div>
+      <div class="card">
+        <table id="schedList"><thead><tr><th>Имя</th><th>Cron</th><th>Действие</th><th>Payload</th><th>Последний запуск</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-subusers" style="display:none">
+      <div class="card">
+        <h3>Добавить субпользователя</h3>
+        <form id="subForm" style="display:flex;gap:10px;margin-top:10px;">
+          <input name="username" placeholder="Имя пользователя" required>
+          <input name="permissions" placeholder="console,files,backups,schedules" value="console,files">
+          <button class="btn btn-primary">Добавить</button>
+        </form>
+      </div>
+      <div class="card">
+        <table id="subList"><thead><tr><th>Пользователь</th><th>Разрешения</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-network" style="display:none">
+      <div class="card">
+        <h3>Проброс портов</h3>
+        <div id="portsList" style="margin-top:10px;"></div>
+        <button class="btn btn-secondary" style="margin-top:8px" onclick="addPort()">+ Добавить порт</button>
+        <hr>
+        <h3>Переменные окружения</h3>
+        <div id="envList" style="margin-top:10px;"></div>
+        <button class="btn btn-secondary" style="margin-top:8px" onclick="addEnv()">+ Добавить переменную</button>
+        <hr>
+        <button class="btn btn-primary" onclick="saveNetwork()">Сохранить (требует «Пересоздать»)</button>
+      </div>
+    </div>
+
+    <div id="tab-settings" style="display:none">
+      <div class="card">
+        <div class="form-group"><label>Название</label><input id="setName"></div>
+        <div class="form-group"><label>Команда запуска</label><input id="setCmd"></div>
+        <div class="form-group"><label>RAM (MB)</label><input id="setMem" type="number"></div>
+        <div class="form-group"><label>CPU (%)</label><input id="setCpu" type="number"></div>
+        <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+        <span class="muted" style="margin-left:10px">Лимиты применяются после «Пересоздать».</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/app.js"></script>
+<script>
+const SID = {{ server_id }};
+let server = null;
+let statsWs = null;
+let termWs = null;
+let term = null, fitAddon = null;
+let curPath = "";
+
+loadSidebar(null);
+
+document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  t.classList.add("active");
+  ["console","files","backups","schedules","subusers","network","settings"].forEach(n => {
+    document.getElementById("tab-" + n).style.display = (n === t.dataset.tab) ? "" : "none";
+  });
+  if (t.dataset.tab === "files") loadFiles("");
+  if (t.dataset.tab === "backups") loadBackups();
+  if (t.dataset.tab === "schedules") loadSchedules();
+  if (t.dataset.tab === "subusers") loadSubs();
+  if (t.dataset.tab === "network") renderNetwork();
+}));
+
+async function loadServer() {
+  server = await api.get(`/api/servers/${SID}`);
+  document.getElementById("srvName").textContent = server.name;
+  setStatus(server.status);
+  document.getElementById("stEgg").textContent = server.egg ? server.egg.name : "—";
+  document.getElementById("setName").value = server.name;
+  document.getElementById("setCmd").value = server.startup_cmd;
+  document.getElementById("setMem").value = server.memory_mb;
+  document.getElementById("setCpu").value = server.cpu_limit;
+}
+
+function setStatus(s) {
+  const el = document.getElementById("srvStatus");
+  el.className = "pill " + s;
+  el.textContent = s;
+  document.getElementById("stStatus").textContent = s;
+}
+
+async function power(action) {
+  try {
+    const r = await api.post(`/api/servers/${SID}/power/${action}`);
+    setStatus(r.status);
+    toast(`${action}: ${r.status}`, "success");
+  } catch (e) { toast(e.message, "error"); }
+}
+
+async function deleteServer() {
+  if (!confirm("Удалить сервер и все его данные?")) return;
+  try { await api.del(`/api/servers/${SID}`); location.href = "/dashboard"; }
+  catch (e) { toast(e.message, "error"); }
+}
+
+// ---------- Stats over WS ----------
+function connectStats() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  statsWs = new WebSocket(`${proto}://${location.host}/ws/servers/${SID}/console`);
+  statsWs.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === "stats") {
+      document.getElementById("stCpu").textContent = m.data.cpu + " %";
+      document.getElementById("stMem").textContent = fmtBytes(m.data.mem) + " / " + fmtBytes(m.data.mem_limit);
+      setStatus(m.data.status);
+    }
+  };
+}
+setInterval(() => {
+  if (statsWs && statsWs.readyState === 1) statsWs.send(JSON.stringify({ type: "stats" }));
+}, 3000);
+
+// ---------- xterm ----------
+function initTerm() {
+  if (term) return;
+  term = new Terminal({ fontFamily: "Consolas, Monaco, monospace", fontSize: 13, theme: { background: "#000" } });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById("term"));
+  setTimeout(() => fitAddon.fit(), 50);
+  window.addEventListener("resize", () => fitAddon && fitAddon.fit());
+}
+function connectTerm(shell) {
+  initTerm();
+  disconnectTerm();
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  termWs = new WebSocket(`${proto}://${location.host}/ws/servers/${SID}/term?shell=${encodeURIComponent(shell)}`);
+  termWs.binaryType = "arraybuffer";
+  termWs.onopen = () => {
+    fitAddon.fit();
+    termWs.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+    term.write(`\r\n\x1b[32m[connected: ${shell}]\x1b[0m\r\n`);
+  };
+  termWs.onmessage = ev => {
+    if (typeof ev.data === "string") term.write(ev.data);
+    else term.write(new Uint8Array(ev.data));
+  };
+  termWs.onclose = () => term.write("\r\n\x1b[31m[disconnected]\x1b[0m\r\n");
+  term.onData(d => termWs && termWs.readyState === 1 && termWs.send(JSON.stringify({ type: "input", data: d })));
+  term.onResize(s => termWs && termWs.readyState === 1 && termWs.send(JSON.stringify({ type: "resize", rows: s.rows, cols: s.cols })));
+}
+function disconnectTerm() {
+  if (termWs) { try { termWs.close(); } catch (e) {} termWs = null; }
+}
+
+// ---------- Files ----------
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function escAttr(s){return String(s||'').replace(/'/g,"\\'");}
+function parentPath(p){const i=p.lastIndexOf("/");return i<0?"":p.slice(0,i);}
+function renderCrumb(p){if(!p)return "/";let acc="";return "/ "+p.split("/").map(x=>{acc=acc?acc+"/"+x:x;return `<a onclick="loadFiles('${escAttr(acc)}')">${escapeHtml(x)}</a>`;}).join(" / ");}
+
+async function loadFiles(path) {
+  curPath = path;
+  const r = await api.get(`/api/servers/${SID}/files?path=${encodeURIComponent(path)}`);
+  document.getElementById("crumb").innerHTML = renderCrumb(path);
+  const list = document.getElementById("filesList");
+  list.innerHTML = "";
+  if (path) list.innerHTML += `<div class="file-row" onclick="loadFiles('${escAttr(parentPath(path))}')"><span class="icon">↩</span><span class="name">..</span></div>`;
+  r.items.forEach(it => {
+    const full = path ? path + "/" + it.name : it.name;
+    list.innerHTML += `<div class="file-row">
+      <span class="icon">${it.is_dir?'📁':'📄'}</span>
+      <span class="name" onclick="${it.is_dir?`loadFiles('${escAttr(full)}')`:`editFile('${escAttr(full)}')`}">${escapeHtml(it.name)}</span>
+      <span class="size">${it.is_dir?'':fmtBytes(it.size)}</span>
+      <span class="actions">
+        ${it.is_dir?'':`<button class="btn btn-secondary" onclick="dlFile('${escAttr(full)}')">⬇</button>`}
+        <button class="btn btn-danger" onclick="delFile('${escAttr(full)}')">×</button>
+      </span>
+    </div>`;
+  });
+}
+async function editFile(path){
+  const r = await api.get(`/api/servers/${SID}/files/read?path=${encodeURIComponent(path)}`);
+  document.getElementById("editFileName").textContent = path;
+  document.getElementById("editor").value = r.content;
+  document.getElementById("editor").dataset.path = path;
+  document.getElementById("editorCard").style.display = "";
+}
+async function saveEdit(){
+  const path = document.getElementById("editor").dataset.path;
+  await api.post(`/api/servers/${SID}/files/write`, { path, content: document.getElementById("editor").value });
+  toast("Сохранено","success");
+}
+function closeEdit(){document.getElementById("editorCard").style.display="none";}
+async function delFile(path){if(!confirm(`Удалить ${path}?`))return;await api.post(`/api/servers/${SID}/files/delete`,{path});loadFiles(curPath);}
+async function newFile(){const n=prompt("Имя файла:");if(!n)return;await api.post(`/api/servers/${SID}/files/write`,{path:curPath?curPath+"/"+n:n,content:""});loadFiles(curPath);}
+async function newDir(){const n=prompt("Имя папки:");if(!n)return;await api.post(`/api/servers/${SID}/files/mkdir`,{path:curPath?curPath+"/"+n:n});loadFiles(curPath);}
+function dlFile(path){window.location.href=`/api/servers/${SID}/files/download?path=${encodeURIComponent(path)}`;}
+async function doUpload(ev){
+  const f=ev.target.files[0]; if(!f)return;
+  const fd=new FormData(); fd.append("file",f);
+  const res=await fetch(`/api/servers/${SID}/files/upload?path=${encodeURIComponent(curPath)}`,{method:"POST",body:fd,credentials:"include"});
+  if(res.ok){toast("Загружено","success");loadFiles(curPath);} else toast("Ошибка загрузки","error");
+  ev.target.value="";
+}
+
+// ---------- Backups ----------
+async function loadBackups(){
+  const list = await api.get(`/api/servers/${SID}/backups`);
+  document.querySelector("#backupsList tbody").innerHTML = list.map(b => `
+    <tr><td>${escapeHtml(b.name)}</td><td><code>${escapeHtml(b.filename)}</code></td>
+    <td>${fmtBytes(b.size)}</td><td class="muted">${b.created_at.replace('T',' ').slice(0,19)}</td>
+    <td>
+      <button class="btn btn-secondary" onclick="window.location='/api/servers/${SID}/backups/${b.id}/download'">⬇</button>
+      <button class="btn btn-warn" onclick="restoreBackup(${b.id})">Восстановить</button>
+      <button class="btn btn-danger" onclick="delBackup(${b.id})">×</button>
+    </td></tr>`).join("");
+}
+async function createBackup(){
+  const name = document.getElementById("backupName").value || "backup";
+  try { await api.post(`/api/servers/${SID}/backups`, { name }); toast("Бэкап создан","success"); loadBackups(); }
+  catch(e){ toast(e.message,"error"); }
+}
+async function restoreBackup(id){ if(!confirm("Восстановить бэкап? Текущие файлы будут перезаписаны."))return;
+  await api.post(`/api/servers/${SID}/backups/${id}/restore`); toast("Восстановлено","success"); }
+async function delBackup(id){ if(!confirm("Удалить бэкап?"))return;
+  await api.del(`/api/servers/${SID}/backups/${id}`); loadBackups(); }
+
+// ---------- Schedules ----------
+async function loadSchedules(){
+  const r = await api.get(`/api/servers/${SID}/schedules`);
+  document.querySelector("#schedList tbody").innerHTML = r.map(s => `
+    <tr><td>${escapeHtml(s.name)}</td><td><code>${escapeHtml(s.cron)}</code></td>
+    <td>${s.action}</td><td><code>${escapeHtml(s.payload)}</code></td>
+    <td class="muted">${s.last_run?s.last_run.replace('T',' ').slice(0,19):'—'}</td>
+    <td><button class="btn btn-danger" onclick="delSched(${s.id})">×</button></td></tr>`).join("");
+}
+document.getElementById("schedForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    await api.post(`/api/servers/${SID}/schedules`, {
+      name: fd.get("name"), cron: fd.get("cron"), action: fd.get("action"),
+      payload: fd.get("payload") || "", enabled: true
+    });
+    e.target.reset(); loadSchedules();
+  } catch(err){ toast(err.message,"error"); }
+});
+async function delSched(id){ if(!confirm("Удалить?"))return; await api.del(`/api/servers/${SID}/schedules/${id}`); loadSchedules(); }
+
+// ---------- Subusers ----------
+async function loadSubs(){
+  try {
+    const r = await api.get(`/api/servers/${SID}/subusers`);
+    document.querySelector("#subList tbody").innerHTML = r.map(s => `
+      <tr><td>${escapeHtml(s.username)}</td><td><code>${escapeHtml(s.permissions)}</code></td>
+      <td><button class="btn btn-danger" onclick="delSub(${s.id})">×</button></td></tr>`).join("");
+  } catch(e){ toast(e.message,"error"); }
+}
+document.getElementById("subForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try { await api.post(`/api/servers/${SID}/subusers`, { username: fd.get("username"), permissions: fd.get("permissions") });
+        e.target.reset(); loadSubs(); }
+  catch(err){ toast(err.message,"error"); }
+});
+async function delSub(id){ if(!confirm("Удалить?"))return; await api.del(`/api/servers/${SID}/subusers/${id}`); loadSubs(); }
+
+// ---------- Network / Env ----------
+function renderNetwork(){
+  const pl = document.getElementById("portsList");
+  pl.innerHTML = (server.ports||[]).map((p,i) => `
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input value="${p.host}" onchange="server.ports[${i}].host=parseInt(this.value)" style="width:120px" placeholder="host">
+      <span>→</span>
+      <input value="${p.container}" onchange="server.ports[${i}].container=parseInt(this.value)" style="width:120px" placeholder="container">
+      <select onchange="server.ports[${i}].proto=this.value">
+        <option ${p.proto==='tcp'?'selected':''}>tcp</option>
+        <option ${p.proto==='udp'?'selected':''}>udp</option>
+      </select>
+      <button class="btn btn-danger" onclick="server.ports.splice(${i},1);renderNetwork()">×</button>
+    </div>`).join("");
+  const el = document.getElementById("envList");
+  const entries = Object.entries(server.env_vars || {});
+  el.innerHTML = entries.map(([k,v],i) => `
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input value="${escapeHtml(k)}" onchange="renameEnv('${escAttr(k)}',this.value)" style="flex:0 0 200px" placeholder="KEY">
+      <span>=</span>
+      <input value="${escapeHtml(v)}" onchange="server.env_vars['${escAttr(k)}']=this.value" placeholder="value">
+      <button class="btn btn-danger" onclick="delete server.env_vars['${escAttr(k)}'];renderNetwork()">×</button>
+    </div>`).join("");
+}
+function addPort(){ server.ports = server.ports || []; server.ports.push({host:8000,container:8000,proto:"tcp"}); renderNetwork(); }
+function addEnv(){ server.env_vars = server.env_vars || {}; const k=prompt("Имя переменной:"); if(!k)return; server.env_vars[k]=""; renderNetwork(); }
+function renameEnv(oldK,newK){ if(oldK===newK)return; server.env_vars[newK]=server.env_vars[oldK]; delete server.env_vars[oldK]; renderNetwork(); }
+async function saveNetwork(){
+  try { await api.req(`/api/servers/${SID}`, { method:"PATCH", body: JSON.stringify({ ports: server.ports, env_vars: server.env_vars }) });
+        toast("Сохранено. Нажмите «Пересоздать» для применения.","success"); }
+  catch(e){ toast(e.message,"error"); }
+}
+
+// ---------- Settings ----------
+async function saveSettings(){
+  try {
+    await api.req(`/api/servers/${SID}`, { method:"PATCH", body: JSON.stringify({
+      name: document.getElementById("setName").value,
+      startup_cmd: document.getElementById("setCmd").value,
+      memory_mb: parseInt(document.getElementById("setMem").value),
+      cpu_limit: parseInt(document.getElementById("setCpu").value),
+    })});
+    toast("Сохранено","success"); loadServer();
+  } catch(e){ toast(e.message,"error"); }
+}
+
+(async () => { await loadServer(); connectStats(); initTerm(); })();
+</script>
+</body>
+</html>

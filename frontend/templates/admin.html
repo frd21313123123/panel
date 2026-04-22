@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Администрирование</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/admin">⚙️ Администрирование</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar"><h1>Администрирование</h1></div>
+
+    <div class="card">
+      <h3 style="margin-bottom:12px">Информация о системе</h3>
+      <div id="sysInfo" class="muted">загрузка…</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3>Пользователи</h3>
+      </div>
+      <table id="users"><thead><tr><th>ID</th><th>Имя</th><th>Email</th><th>Роль</th><th>Создан</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <h3>Шаблоны (eggs)</h3>
+        <button class="btn btn-primary" onclick="openEgg()">+ Новый шаблон</button>
+      </div>
+      <table id="eggs"><thead><tr><th>ID</th><th>Название</th><th>Язык</th><th>Образ</th><th>Команда</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+  </main>
+</div>
+<div id="modal"></div>
+
+<script src="/static/js/app.js"></script>
+<script>
+loadSidebar("/admin");
+
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function loadSys() {
+  try {
+    const i = await api.get("/api/system");
+    document.getElementById("sysInfo").innerHTML = i.docker
+      ? `<div class="stat-grid">
+          <div class="stat"><div class="label">Docker</div><div class="value" style="color:var(--green)">OK</div></div>
+          <div class="stat"><div class="label">Контейнеры</div><div class="value">${i.containers_running}/${i.containers}</div></div>
+          <div class="stat"><div class="label">Образы</div><div class="value">${i.images}</div></div>
+          <div class="stat"><div class="label">CPU</div><div class="value">${i.cpus}</div></div>
+          <div class="stat"><div class="label">RAM</div><div class="value">${fmtBytes(i.memory)}</div></div>
+          <div class="stat"><div class="label">OS</div><div class="value" style="font-size:13px">${escapeHtml(i.os)}</div></div>
+        </div>`
+      : `<div style="color:var(--red)">Docker недоступен. Запустите Docker Desktop (Windows) или dockerd (Linux).</div>`;
+  } catch (e) {}
+}
+
+async function loadUsers() {
+  try {
+    const us = await api.get("/api/users");
+    document.querySelector("#users tbody").innerHTML = us.map(u => `
+      <tr>
+        <td>${u.id}</td><td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.email)}</td>
+        <td>${u.is_admin ? '<span class="pill running">admin</span>' : 'user'}</td>
+        <td class="muted">${u.created_at.slice(0,10)}</td>
+        <td><button class="btn btn-danger" onclick="delUser(${u.id})">Удалить</button></td>
+      </tr>`).join("");
+  } catch (e) { toast(e.message, "error"); }
+}
+async function delUser(id) {
+  if (!confirm("Удалить пользователя и все его серверы?")) return;
+  try { await api.del(`/api/users/${id}`); loadUsers(); } catch (e) { toast(e.message, "error"); }
+}
+
+async function loadEggs() {
+  const es = await api.get("/api/eggs");
+  document.querySelector("#eggs tbody").innerHTML = es.map(e => `
+    <tr><td>${e.id}</td><td>${escapeHtml(e.name)}</td><td>${escapeHtml(e.language)}</td>
+        <td><code>${escapeHtml(e.docker_image)}</code></td>
+        <td><code>${escapeHtml(e.default_cmd)}</code></td>
+        <td><button class="btn btn-danger" onclick="delEgg(${e.id})">×</button></td></tr>`).join("");
+}
+async function delEgg(id) {
+  if (!confirm("Удалить шаблон?")) return;
+  try { await api.del(`/api/eggs/${id}`); loadEggs(); } catch (e) { toast(e.message, "error"); }
+}
+
+function openEgg() {
+  document.getElementById("modal").innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this)closeModal()">
+      <div class="modal">
+        <h2>Новый шаблон</h2>
+        <form id="eggForm">
+          <div class="form-group"><label>Название</label><input name="name" required></div>
+          <div class="form-group"><label>Язык</label><input name="language" required placeholder="python / javascript / go / bash"></div>
+          <div class="form-group"><label>Docker-образ</label><input name="docker_image" required placeholder="python:3.12-slim"></div>
+          <div class="form-group"><label>Команда запуска</label><input name="default_cmd" required placeholder="python main.py"></div>
+          <div class="form-group"><label>Описание</label><textarea name="description"></textarea></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+            <button class="btn btn-primary">Создать</button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+  document.getElementById("eggForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api.post("/api/eggs", {
+        name: fd.get("name"), language: fd.get("language"),
+        docker_image: fd.get("docker_image"), default_cmd: fd.get("default_cmd"),
+        description: fd.get("description") || "",
+      });
+      closeModal(); loadEggs();
+    } catch (err) { toast(err.message, "error"); }
+  });
+}
+function closeModal() { document.getElementById("modal").innerHTML = ""; }
+
+loadSys(); loadUsers(); loadEggs();
+</script>
+</body>
+</html>
