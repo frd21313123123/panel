@@ -46,6 +46,10 @@ class Server(Base):
     data_dir = Column(String(512), default="")
     ports = Column(Text, default="")  # JSON: [{"host":8000,"container":8000,"proto":"tcp"}]
     env_vars = Column(Text, default="")  # JSON dict
+    git_repo = Column(String(512), default="")
+    git_branch = Column(String(128), default="")
+    git_subdir = Column(String(255), default="")
+    git_auto_update = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="servers")
@@ -91,6 +95,7 @@ class Backup(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate_server_table()
     db = SessionLocal()
     try:
         if db.query(Egg).count() == 0:
@@ -110,6 +115,22 @@ def init_db():
             db.commit()
     finally:
         db.close()
+
+
+def _migrate_server_table():
+    if engine.dialect.name != "sqlite":
+        return
+
+    with engine.begin() as conn:
+        columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(servers)").fetchall()}
+        if "git_repo" not in columns:
+            conn.exec_driver_sql("ALTER TABLE servers ADD COLUMN git_repo VARCHAR(512) DEFAULT ''")
+        if "git_branch" not in columns:
+            conn.exec_driver_sql("ALTER TABLE servers ADD COLUMN git_branch VARCHAR(128) DEFAULT ''")
+        if "git_subdir" not in columns:
+            conn.exec_driver_sql("ALTER TABLE servers ADD COLUMN git_subdir VARCHAR(255) DEFAULT ''")
+        if "git_auto_update" not in columns:
+            conn.exec_driver_sql("ALTER TABLE servers ADD COLUMN git_auto_update BOOLEAN DEFAULT 0")
 
 
 def get_db():

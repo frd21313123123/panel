@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <div class="app">
@@ -23,62 +24,98 @@
   </aside>
   <main class="main">
     <div class="topbar">
-      <h1 id="srvName">Сервер</h1>
+      <div>
+        <a href="/dashboard" class="muted" style="font-size:12px;text-decoration:none;">← Все серверы</a>
+        <h1 id="srvName" style="margin-top:2px">Сервер</h1>
+      </div>
       <span id="srvStatus" class="pill offline">offline</span>
     </div>
 
     <div class="card">
+      <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Управление питанием</div>
       <div class="power-row">
-        <button class="btn btn-success" onclick="power('start')">▶ Запустить</button>
-        <button class="btn btn-warn" onclick="power('restart')">↻ Рестарт</button>
-        <button class="btn btn-secondary" onclick="power('stop')">■ Стоп</button>
-        <button class="btn btn-danger" onclick="power('kill')">✕ Kill</button>
-        <button class="btn btn-secondary" onclick="power('rebuild')">🔧 Пересоздать</button>
+        <button class="btn btn-success" onclick="power('start')" title="Запустить контейнер">▶ Запустить</button>
+        <button class="btn btn-warn" onclick="power('restart')" title="Перезапустить контейнер (плавно)">↻ Рестарт</button>
+        <button class="btn btn-secondary" onclick="power('stop')" title="Остановить контейнер (SIGTERM)">■ Стоп</button>
+        <button class="btn btn-danger" onclick="power('kill')" title="Принудительно убить контейнер (SIGKILL)">✕ Kill</button>
+        <button class="btn btn-secondary" onclick="power('rebuild')" title="Удалить и создать заново с новыми настройками">🔧 Пересоздать</button>
         <span class="right"></span>
-        <button class="btn btn-danger" onclick="deleteServer()">🗑 Удалить сервер</button>
+        <button class="btn btn-danger" onclick="deleteServer()" title="Полностью удалить сервер со всеми данными">🗑 Удалить сервер</button>
       </div>
     </div>
 
     <div class="card">
-      <div class="stat-grid">
-        <div class="stat"><div class="label">CPU</div><div class="value" id="stCpu">—</div></div>
-        <div class="stat"><div class="label">Memory</div><div class="value" id="stMem">—</div></div>
-        <div class="stat"><div class="label">Status</div><div class="value" id="stStatus">—</div></div>
-        <div class="stat"><div class="label">Egg</div><div class="value" id="stEgg" style="font-size:14px">—</div></div>
+      <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:10px;">Мониторинг ресурсов · обновление каждые 2 сек</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="stat" style="padding:12px;" title="Процент использования CPU относительно выделенного лимита">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">Процессор</span>
+            <span class="value" id="stCpu" style="font-size:18px;color:var(--accent)">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="cpuChart"></canvas></div>
+        </div>
+        <div class="stat" style="padding:12px;" title="Оперативная память: занято / лимит">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">ОЗУ (занято / лимит)</span>
+            <span class="value" id="stMem" style="font-size:14px;color:var(--green)">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="memChart"></canvas></div>
+        </div>
+        <div class="stat" style="padding:12px;" title="Сетевой трафик: входящий (синяя линия) и исходящий (красная)">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">Сеть (приём / отдача)</span>
+            <span class="value" id="stNet" style="font-size:13px;">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="netChart"></canvas></div>
+        </div>
+        <div class="stat" style="padding:12px;" title="Размер данных сервера на диске (папка /home/container)">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">Занято на диске</span>
+            <span class="value" id="stDisk" style="font-size:18px;color:var(--yellow)">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="diskChart"></canvas></div>
+        </div>
+      </div>
+      <div class="stat-grid" style="margin-top:12px;">
+        <div class="stat" title="Текущий статус Docker-контейнера"><div class="label">Статус</div><div class="value" id="stStatus">—</div></div>
+        <div class="stat" title="Используемый шаблон (runtime)"><div class="label">Шаблон</div><div class="value" id="stEgg" style="font-size:14px">—</div></div>
       </div>
     </div>
 
     <div class="tabs">
-      <div class="tab active" data-tab="console">Консоль</div>
-      <div class="tab" data-tab="files">Файлы</div>
-      <div class="tab" data-tab="backups">Бэкапы</div>
-      <div class="tab" data-tab="schedules">Расписание</div>
-      <div class="tab" data-tab="subusers">Субпользователи</div>
-      <div class="tab" data-tab="network">Сеть / Env</div>
-      <div class="tab" data-tab="settings">Настройки</div>
+      <div class="tab active" data-tab="console" title="Консоль и события">💻 Консоль</div>
+      <div class="tab" data-tab="files" title="Файловый менеджер">📁 Файлы</div>
+      <div class="tab" data-tab="backups" title="Архивы данных сервера">💾 Бэкапы</div>
+      <div class="tab" data-tab="schedules" title="Задания по расписанию (cron)">⏰ Расписание</div>
+      <div class="tab" data-tab="subusers" title="Совместный доступ">👥 Субпользователи</div>
+      <div class="tab" data-tab="network" title="Порты и переменные окружения">🌐 Сеть / Env</div>
+      <div class="tab" data-tab="settings" title="Параметры контейнера">⚙️ Настройки</div>
     </div>
 
     <div id="tab-console">
       <div class="card">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Интерактивный терминал</div>
         <div id="term" style="height:480px;background:#000;padding:6px;border-radius:4px;"></div>
-        <div style="margin-top:8px;" class="muted">Интерактивный TTY через docker exec. Запусти сервер и подключись.</div>
-        <div style="margin-top:8px;">
-          <button class="btn btn-secondary" onclick="connectTerm('/bin/sh')">Подключить sh</button>
-          <button class="btn btn-secondary" onclick="connectTerm('/bin/bash')">Подключить bash</button>
+        <div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="connectTerm('/bin/sh')" title="Подключиться через sh (есть в любом образе)">Подключить sh</button>
+          <button class="btn btn-secondary" onclick="connectTerm('/bin/bash')" title="Подключиться через bash (если установлен в образе)">Подключить bash</button>
           <button class="btn btn-secondary" onclick="disconnectTerm()">Отключить</button>
+          <span class="muted" style="font-size:11px;margin-left:auto">Для ввода команд сперва запустите сервер и нажмите «Подключить sh/bash»</span>
         </div>
       </div>
     </div>
 
     <div id="tab-files" style="display:none">
       <div class="card">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Файловый менеджер · корень = /home/container</div>
         <div class="breadcrumb" id="crumb"></div>
-        <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
-          <button class="btn btn-secondary" onclick="newFile()">+ Файл</button>
-          <button class="btn btn-secondary" onclick="newDir()">+ Папка</button>
-          <label class="btn btn-secondary" style="cursor:pointer;">
+        <div style="display:flex;gap:6px;margin:8px 0 12px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-secondary" onclick="newFile()" title="Создать пустой файл">+ Файл</button>
+          <button class="btn btn-secondary" onclick="newDir()" title="Создать папку">+ Папка</button>
+          <label class="btn btn-secondary" style="cursor:pointer;" title="Загрузить файл с компьютера">
             ⬆ Загрузить <input type="file" id="uploadInput" style="display:none" onchange="doUpload(event)">
           </label>
+          <span class="muted" style="font-size:11px;margin-left:auto">Поддерживаются zip, tar, gz, bz2, xz, 7z — разархивация через кнопку 📂</span>
         </div>
         <div id="filesList"></div>
       </div>
@@ -96,57 +133,68 @@
 
     <div id="tab-backups" style="display:none">
       <div class="card">
-        <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <h3 style="margin-bottom:4px">Новый бэкап</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:12px">Архивация всех файлов сервера в tar.gz. Можно скачать или восстановить одним кликом.</div>
+        <div style="display:flex;gap:8px;">
           <input id="backupName" placeholder="Название бэкапа" value="backup">
-          <button class="btn btn-primary" onclick="createBackup()">Создать</button>
+          <button class="btn btn-primary" onclick="createBackup()" title="Создать архив текущего состояния">💾 Создать</button>
         </div>
-        <table id="backupsList"><thead><tr><th>Имя</th><th>Файл</th><th>Размер</th><th>Дата</th><th></th></tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:12px">Существующие бэкапы</h3>
+        <table id="backupsList"><thead><tr><th>Имя</th><th>Файл</th><th>Размер</th><th>Дата</th><th style="width:220px">Действия</th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
     <div id="tab-schedules" style="display:none">
       <div class="card">
-        <h3>Новое расписание</h3>
-        <form id="schedForm" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
-          <input name="name" placeholder="Название" required>
-          <input name="cron" placeholder="Cron: m h dom mon dow (например: 0 * * * *)" required>
+        <h3 style="margin-bottom:4px">Новое расписание</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Запуск команд по cron-выражению. Пример: <code>0 * * * *</code> — каждый час, <code>*/15 * * * *</code> — каждые 15 минут.</div>
+        <form id="schedForm" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <input name="name" placeholder="Название (например: ночной рестарт)" required>
+          <input name="cron" placeholder="m h dom mon dow · напр. 0 3 * * *" required>
           <select name="action">
-            <option value="command">Команда в контейнере</option>
-            <option value="restart">Рестарт</option>
-            <option value="stop">Стоп</option>
-            <option value="start">Старт</option>
+            <option value="command">Выполнить команду в контейнере</option>
+            <option value="restart">Рестарт контейнера</option>
+            <option value="stop">Остановить контейнер</option>
+            <option value="start">Запустить контейнер</option>
           </select>
-          <input name="payload" placeholder="Команда (для action=command)">
-          <button class="btn btn-primary" style="grid-column:1/3">Добавить</button>
+          <input name="payload" placeholder="Команда (только для action = command)">
+          <button class="btn btn-primary" style="grid-column:1/3">+ Добавить расписание</button>
         </form>
       </div>
       <div class="card">
-        <table id="schedList"><thead><tr><th>Имя</th><th>Cron</th><th>Действие</th><th>Payload</th><th>Последний запуск</th><th></th></tr></thead><tbody></tbody></table>
+        <h3 style="margin-bottom:12px">Активные расписания</h3>
+        <table id="schedList"><thead><tr><th>Имя</th><th>Cron</th><th>Действие</th><th>Payload</th><th>Последний запуск</th><th style="width:60px"></th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
     <div id="tab-subusers" style="display:none">
       <div class="card">
-        <h3>Добавить субпользователя</h3>
-        <form id="subForm" style="display:flex;gap:10px;margin-top:10px;">
-          <input name="username" placeholder="Имя пользователя" required>
-          <input name="permissions" placeholder="console,files,backups,schedules" value="console,files">
-          <button class="btn btn-primary">Добавить</button>
+        <h3 style="margin-bottom:4px">Добавить субпользователя</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Дайте другому пользователю панели ограниченный доступ к этому серверу. Права указываются через запятую: <code>console, files, backups, schedules</code>.</div>
+        <form id="subForm" style="display:flex;gap:10px;flex-wrap:wrap;">
+          <input name="username" placeholder="Существующее имя пользователя" required style="flex:1;min-width:200px">
+          <input name="permissions" placeholder="console,files" value="console,files" style="flex:1;min-width:200px">
+          <button class="btn btn-primary">+ Добавить</button>
         </form>
       </div>
       <div class="card">
-        <table id="subList"><thead><tr><th>Пользователь</th><th>Разрешения</th><th></th></tr></thead><tbody></tbody></table>
+        <h3 style="margin-bottom:12px">Доступ предоставлен</h3>
+        <table id="subList"><thead><tr><th>Пользователь</th><th>Разрешения</th><th style="width:60px"></th></tr></thead><tbody></tbody></table>
       </div>
     </div>
 
     <div id="tab-network" style="display:none">
       <div class="card">
-        <h3>Проброс портов</h3>
-        <div id="portsList" style="margin-top:10px;"></div>
+        <h3 style="margin-bottom:4px">Проброс портов</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Привязка портов контейнера к портам хоста. Формат: <code>host:container/proto</code>. Изменения применяются после «Пересоздать».</div>
+        <div id="portsList"></div>
         <button class="btn btn-secondary" style="margin-top:8px" onclick="addPort()">+ Добавить порт</button>
         <hr>
-        <h3>Переменные окружения</h3>
-        <div id="envList" style="margin-top:10px;"></div>
+        <h3 style="margin-bottom:4px">Переменные окружения</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Будут переданы в контейнер как env-переменные. Используются для токенов, ключей API и т.п. Применяются после «Пересоздать».</div>
+        <div id="envList"></div>
         <button class="btn btn-secondary" style="margin-top:8px" onclick="addEnv()">+ Добавить переменную</button>
         <hr>
         <button class="btn btn-primary" onclick="saveNetwork()">Сохранить (требует «Пересоздать»)</button>
@@ -159,6 +207,19 @@
         <div class="form-group"><label>Команда запуска</label><input id="setCmd"></div>
         <div class="form-group"><label>RAM (MB)</label><input id="setMem" type="number"></div>
         <div class="form-group"><label>CPU (%)</label><input id="setCpu" type="number"></div>
+        <hr>
+        <h3 style="margin-bottom:4px">GitHub автообновление</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          Если включено, перед стартом/рестартом панель сама обновит код через <code>git clone</code> или <code>git pull</code>.
+          Папка должна быть пустой либо уже быть git-репозиторием без локальных изменений.
+        </div>
+        <div class="form-group"><label>Git URL</label><input id="setGitRepo" placeholder="https://github.com/user/repo.git"></div>
+        <div class="form-group"><label>Ветка</label><input id="setGitBranch" placeholder="main"></div>
+        <div class="form-group"><label>Папка внутри сервера</label><input id="setGitSubdir" placeholder="Например: bot"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:10px 0 14px;">
+          <input id="setGitAuto" type="checkbox">
+          <span>Обновлять код перед стартом/рестартом</span>
+        </label>
         <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
         <span class="muted" style="margin-left:10px">Лимиты применяются после «Пересоздать».</span>
       </div>
@@ -199,6 +260,10 @@ async function loadServer() {
   document.getElementById("setCmd").value = server.startup_cmd;
   document.getElementById("setMem").value = server.memory_mb;
   document.getElementById("setCpu").value = server.cpu_limit;
+  document.getElementById("setGitRepo").value = server.git_repo || "";
+  document.getElementById("setGitBranch").value = server.git_branch || "";
+  document.getElementById("setGitSubdir").value = server.git_subdir || "";
+  document.getElementById("setGitAuto").checked = !!server.git_auto_update;
 }
 
 function setStatus(s) {
@@ -208,12 +273,28 @@ function setStatus(s) {
   document.getElementById("stStatus").textContent = s;
 }
 
+const _actionLabel = { start:"▶ Запуск", restart:"↻ Рестарт", stop:"■ Остановка", kill:"✕ Kill", rebuild:"🔧 Пересоздание" };
+const _statusAnsi = { running:"\x1b[32m", exited:"\x1b[31m", offline:"\x1b[31m", starting:"\x1b[33m", paused:"\x1b[33m", created:"\x1b[34m" };
+
+function termLog(msg, ansiColor) {
+  if (!term) return;
+  const ts = new Date().toTimeString().slice(0,8);
+  const col = ansiColor || "\x1b[36m";
+  term.write(`\r\n${col}[${ts}] ${msg}\x1b[0m\r\n`);
+}
+
 async function power(action) {
+  const label = _actionLabel[action] || action;
+  termLog(`${label}…`, "\x1b[33m");
   try {
     const r = await api.post(`/api/servers/${SID}/power/${action}`);
     setStatus(r.status);
-    toast(`${action}: ${r.status}`, "success");
-  } catch (e) { toast(e.message, "error"); }
+    if (r.message) termLog(r.message, "\x1b[36m");
+    termLog(`Статус: ${r.status}`, _statusAnsi[r.status] || "\x1b[36m");
+  } catch (e) {
+    termLog(`Ошибка: ${e.message}`, "\x1b[31m");
+    toast(e.message, "error");
+  }
 }
 
 async function deleteServer() {
@@ -222,22 +303,90 @@ async function deleteServer() {
   catch (e) { toast(e.message, "error"); }
 }
 
-// ---------- Stats over WS ----------
-function connectStats() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  statsWs = new WebSocket(`${proto}://${location.host}/ws/servers/${SID}/console`);
-  statsWs.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    if (m.type === "stats") {
-      document.getElementById("stCpu").textContent = m.data.cpu + " %";
-      document.getElementById("stMem").textContent = fmtBytes(m.data.mem) + " / " + fmtBytes(m.data.mem_limit);
-      setStatus(m.data.status);
+// ---------- Stats polling + charts ----------
+const MAX_POINTS = 30;
+let cpuChart = null, memChart = null, netChart = null, diskChart = null;
+let lastStatus = null;
+let prevNet = null;  // { t, rx, tx } for delta calc
+
+function buildChart(ctx, color, yFmt, extraDataset) {
+  const datasets = [{
+    data: Array(MAX_POINTS).fill(null),
+    borderColor: color,
+    backgroundColor: color + "22",
+    borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0,
+  }];
+  if (extraDataset) datasets.push(extraDataset);
+  return new Chart(ctx, {
+    type: "line",
+    data: { labels: Array(MAX_POINTS).fill(""), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: true,
+             ticks: { color: "#8a97a5", font: { size: 10 }, maxTicksLimit: 4, callback: yFmt },
+             grid: { color: "#2d3843" } }
+      }
     }
-  };
+  });
 }
-setInterval(() => {
-  if (statsWs && statsWs.readyState === 1) statsWs.send(JSON.stringify({ type: "stats" }));
-}, 3000);
+
+function initCharts() {
+  cpuChart  = buildChart(document.getElementById("cpuChart"),  "#22d3ee", v => v + "%");
+  memChart  = buildChart(document.getElementById("memChart"),  "#10b981", v => fmtBytes(v));
+  diskChart = buildChart(document.getElementById("diskChart"), "#f59e0b", v => fmtBytes(v));
+  netChart  = buildChart(document.getElementById("netChart"),  "#3b82f6", v => fmtBytes(v) + "/s", {
+    data: Array(MAX_POINTS).fill(null),
+    borderColor: "#ef4444", backgroundColor: "#ef444422",
+    borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0,
+  });
+}
+
+function pushPoint(chart, v, ds = 0) {
+  chart.data.datasets[ds].data.push(v);
+  chart.data.datasets[ds].data.shift();
+  chart.update("none");
+}
+
+async function pollStats() {
+  try {
+    const d = await api.get(`/api/servers/${SID}/stats`);
+    document.getElementById("stCpu").textContent = d.cpu + " %";
+    document.getElementById("stMem").textContent = fmtBytes(d.mem) + " / " + fmtBytes(d.mem_limit);
+    document.getElementById("stDisk").textContent = fmtBytes(d.disk || 0);
+
+    const now = Date.now();
+    let rxRate = 0, txRate = 0;
+    if (prevNet && d.status === "running") {
+      const dt = (now - prevNet.t) / 1000;
+      if (dt > 0) {
+        rxRate = Math.max(0, (d.net_rx - prevNet.rx) / dt);
+        txRate = Math.max(0, (d.net_tx - prevNet.tx) / dt);
+      }
+    }
+    prevNet = { t: now, rx: d.net_rx || 0, tx: d.net_tx || 0 };
+    document.getElementById("stNet").textContent =
+      fmtBytes(rxRate) + "/s ↓ · " + fmtBytes(txRate) + "/s ↑";
+
+    if (cpuChart)  pushPoint(cpuChart,  d.cpu);
+    if (memChart)  pushPoint(memChart,  d.mem);
+    if (diskChart) pushPoint(diskChart, d.disk || 0);
+    if (netChart) { pushPoint(netChart, rxRate, 0); pushPoint(netChart, txRate, 1); }
+
+    if (d.status !== lastStatus) {
+      if (lastStatus !== null) termLog(`Статус контейнера: ${d.status}`, _statusAnsi[d.status] || "\x1b[36m");
+      lastStatus = d.status;
+    }
+    setStatus(d.status);
+  } catch(e) {}
+}
+function connectStats() {
+  initCharts();
+  pollStats();
+  setInterval(pollStats, 2000);
+}
 
 // ---------- xterm ----------
 function initTerm() {
@@ -308,8 +457,8 @@ async function extractFile(path) {
   const destInput = prompt(`Распаковать «${path}» в папку (оставь пустым — рядом с архивом):`, "");
   if (destInput === null) return; // отмена
   try {
-    const r = await api.post(`/api/servers/${SID}/files/extract`, { path, dest: destInput });
-    toast(`Распаковано файлов: ${r.files_extracted}`, "success");
+    await api.post(`/api/servers/${SID}/files/extract`, { path, dest: destInput });
+    toast("Распаковка запущена…", "success");
     loadFiles(curPath);
   } catch(e) { toast(e.message, "error"); }
 }
@@ -463,12 +612,16 @@ async function saveSettings(){
       startup_cmd: document.getElementById("setCmd").value,
       memory_mb: parseInt(document.getElementById("setMem").value),
       cpu_limit: parseInt(document.getElementById("setCpu").value),
+      git_repo: document.getElementById("setGitRepo").value,
+      git_branch: document.getElementById("setGitBranch").value,
+      git_subdir: document.getElementById("setGitSubdir").value,
+      git_auto_update: document.getElementById("setGitAuto").checked,
     })});
     toast("Сохранено","success"); loadServer();
   } catch(e){ toast(e.message,"error"); }
 }
 
-(async () => { await loadServer(); connectStats(); initTerm(); taskbar.startPolling(SID); })();
+(async () => { await loadServer(); initTerm(); connectStats(); taskbar.startPolling(SID); })();
 </script>
 </body>
 </html>
