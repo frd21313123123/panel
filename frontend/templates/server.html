@@ -308,8 +308,8 @@ async function extractFile(path) {
   const destInput = prompt(`Распаковать «${path}» в папку (оставь пустым — рядом с архивом):`, "");
   if (destInput === null) return; // отмена
   try {
-    const r = await api.post(`/api/servers/${SID}/files/extract`, { path, dest: destInput });
-    toast(`Распаковано файлов: ${r.files_extracted}`, "success");
+    await api.post(`/api/servers/${SID}/files/extract`, { path, dest: destInput });
+    toast("Распаковка запущена…", "success");
     loadFiles(curPath);
   } catch(e) { toast(e.message, "error"); }
 }

@@ -549,7 +549,7 @@ async def console_ws(websocket: WebSocket, sid: int, token: Optional[str] = None
             await websocket.send_json({"type": "error", "message": "server not found"})
             await websocket.close()
             return
-        user = db.query(User).get(payload["sub"])
+        user = db.query(User).get(int(payload["sub"]))
         if not user or (s.owner_id != user.id and not user.is_admin):
             await websocket.send_json({"type": "error", "message": "forbidden"})
             await websocket.close()
@@ -786,7 +786,7 @@ async def term_ws(websocket: WebSocket, sid: int, token: Optional[str] = None,
     db = SessionLocal()
     try:
         s = db.query(Server).get(sid)
-        u = db.query(User).get(payload["sub"])
+        u = db.query(User).get(int(payload["sub"]))
         if not s or not u:
             await websocket.close(code=4404); return
         if s.owner_id != u.id and not u.is_admin:
