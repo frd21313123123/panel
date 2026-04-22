@@ -19,27 +19,34 @@
     <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
   </aside>
   <main class="main">
-    <div class="topbar"><h1>Профиль</h1></div>
+    <div class="topbar">
+      <div>
+        <h1>Профиль</h1>
+        <div class="muted" style="font-size:13px;margin-top:4px">Ваши учётные данные и безопасность аккаунта</div>
+      </div>
+    </div>
 
-    <div class="card" style="max-width:500px">
-      <h3 style="margin-bottom:14px">Информация об аккаунте</h3>
+    <div class="card" style="max-width:560px">
+      <h3 style="margin-bottom:4px">Информация об аккаунте</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:14px">Эти данные задаются администратором при создании учётной записи</div>
       <div id="info" class="muted">загрузка…</div>
     </div>
 
-    <div class="card" style="max-width:500px">
-      <h3 style="margin-bottom:14px">Сменить пароль</h3>
+    <div class="card" style="max-width:560px">
+      <h3 style="margin-bottom:4px">Сменить пароль</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:14px">После смены пароля вход в другие сессии останется активным до истечения токена</div>
       <form id="pwForm">
         <div class="form-group">
           <label>Текущий пароль</label>
-          <input type="password" name="current_password" required>
+          <input type="password" name="current_password" required autocomplete="current-password">
         </div>
         <div class="form-group">
-          <label>Новый пароль</label>
-          <input type="password" name="new_password" required minlength="4">
+          <label>Новый пароль <span class="muted" style="font-weight:400;font-size:11px">· минимум 4 символа</span></label>
+          <input type="password" name="new_password" required minlength="4" autocomplete="new-password">
         </div>
         <div class="form-group">
           <label>Повторите новый пароль</label>
-          <input type="password" name="confirm" required minlength="4">
+          <input type="password" name="confirm" required minlength="4" autocomplete="new-password">
         </div>
         <button class="btn btn-primary">Сменить пароль</button>
       </form>
@@ -54,10 +61,10 @@ async function loadInfo() {
   const me = await api.get("/api/auth/me");
   document.getElementById("info").innerHTML = `
     <table>
-      <tr><th>ID</th><td>${me.id}</td></tr>
+      <tr><th style="width:180px">ID</th><td class="muted">#${me.id}</td></tr>
       <tr><th>Имя пользователя</th><td><b>${escapeHtml(me.username)}</b></td></tr>
       <tr><th>Email</th><td>${escapeHtml(me.email)}</td></tr>
-      <tr><th>Роль</th><td>${me.is_admin ? '<span class="pill running">admin</span>' : 'user'}</td></tr>
+      <tr><th>Роль</th><td>${me.is_admin ? '<span class="pill running">администратор</span> <span class="muted" style="font-size:12px">полный доступ к панели</span>' : '<span class="muted">обычный пользователь</span>'}</td></tr>
     </table>`;
 }
 

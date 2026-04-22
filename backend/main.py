@@ -56,6 +56,7 @@ class RegisterIn(BaseModel):
     username: str
     email: EmailStr
     password: str
+    is_admin: bool = False
 
 
 class LoginIn(BaseModel):
@@ -180,7 +181,7 @@ def register(body: RegisterIn, db: Session = Depends(get_db),
         username=body.username,
         email=body.email,
         password_hash=auth.hash_password(body.password),
-        is_admin=False,
+        is_admin=body.is_admin,
     )
     db.add(u)
     db.commit()
