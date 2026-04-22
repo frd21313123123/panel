@@ -2,6 +2,8 @@
 import asyncio
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional, List
 
@@ -79,6 +81,10 @@ class ServerCreate(BaseModel):
     startup_cmd: str = ""
     ports: List[PortDef] = []
     env_vars: dict = {}
+    git_repo: str = ""
+    git_branch: str = ""
+    git_subdir: str = ""
+    git_auto_update: bool = False
 
 
 class ServerUpdate(BaseModel):
@@ -89,6 +95,10 @@ class ServerUpdate(BaseModel):
     startup_cmd: Optional[str] = None
     ports: Optional[List[PortDef]] = None
     env_vars: Optional[dict] = None
+    git_repo: Optional[str] = None
+    git_branch: Optional[str] = None
+    git_subdir: Optional[str] = None
+    git_auto_update: Optional[bool] = None
 
 
 class SubuserIn(BaseModel):
@@ -294,6 +304,79 @@ def _parse_json(text: str, default):
         return default
 
 
+def _clean_git_subdir(value: Optional[str]) -> str:
+    text = (value or "").strip().replace("\\", "/")
+    return text.strip("/")
+
+
+def _git_output(stdout: str, stderr: str) -> str:
+    parts = [part.strip() for part in (stdout or "", stderr or "") if part and part.strip()]
+    return "\n".join(parts).strip()
+
+
+def _run_git(args: list[str], cwd: Path, check: bool = True):
+    if not shutil.which("git"):
+        raise HTTPException(500, "Git is not installed on the panel host")
+
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "Git operation timed out")
+
+    output = _git_output(proc.stdout, proc.stderr)
+    if check and proc.returncode != 0:
+        raise HTTPException(400, output or f"Git command failed: git {' '.join(args)}")
+    return proc.returncode, output
+
+
+def _sync_server_repo(s: Server) -> str:
+    repo = (s.git_repo or "").strip()
+    if not s.git_auto_update or not repo:
+        return ""
+
+    worktree = fs._safe(s.id, _clean_git_subdir(s.git_subdir))
+    worktree.mkdir(parents=True, exist_ok=True)
+    branch = (s.git_branch or "").strip()
+    messages = []
+
+    if (worktree / ".git").exists():
+        _, origin = _run_git(["config", "--get", "remote.origin.url"], worktree, check=False)
+        if origin and origin.strip() != repo:
+            raise HTTPException(400, "Configured Git URL does not match this folder's origin remote")
+
+        _, dirty = _run_git(["status", "--porcelain"], worktree, check=False)
+        if dirty.strip():
+            raise HTTPException(400, "Git auto-update stopped: repository has local changes")
+
+        if branch:
+            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
+            code, _ = _run_git(["checkout", branch], worktree, check=False)
+            if code != 0:
+                _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
+            messages.append(_run_git(["pull", "--ff-only", "origin", branch], worktree)[1])
+        else:
+            messages.append(_run_git(["pull", "--ff-only"], worktree)[1])
+    else:
+        if any(worktree.iterdir()):
+            raise HTTPException(400, "Git auto-update target folder is not empty")
+
+        clone_args = ["clone"]
+        if branch:
+            clone_args += ["--branch", branch, "--single-branch"]
+        clone_args += [repo, "."]
+        messages.append(_run_git(clone_args, worktree)[1])
+
+    return "\n".join(msg for msg in messages if msg).strip()
+
+
 def _server_dto(s: Server) -> dict:
     return {
         "id": s.id, "name": s.name, "status": s.status, "owner_id": s.owner_id,
@@ -303,6 +386,10 @@ def _server_dto(s: Server) -> dict:
         "startup_cmd": s.startup_cmd or (s.egg.default_cmd if s.egg else ""),
         "ports": _parse_json(s.ports, []),
         "env_vars": _parse_json(s.env_vars, {}),
+        "git_repo": s.git_repo or "",
+        "git_branch": s.git_branch or "",
+        "git_subdir": _clean_git_subdir(s.git_subdir),
+        "git_auto_update": bool(s.git_auto_update),
     }
 
 
@@ -328,34 +415,42 @@ def create_server(body: ServerCreate, db: Session = Depends(get_db), user: User 
     egg = db.query(Egg).get(body.egg_id)
     if not egg:
         raise HTTPException(404, "Egg not found")
+    git_repo = (body.git_repo or "").strip()
+    git_subdir = _clean_git_subdir(body.git_subdir)
+    if body.git_auto_update and not git_repo:
+        raise HTTPException(400, "Git repository URL is required for auto-update")
     s = Server(
         name=body.name, owner_id=user.id, egg_id=egg.id,
         memory_mb=body.memory_mb, cpu_limit=body.cpu_limit, disk_mb=body.disk_mb,
         startup_cmd=body.startup_cmd or egg.default_cmd,
         ports=json.dumps([p.model_dump() for p in body.ports]),
         env_vars=json.dumps(body.env_vars or {}),
+        git_repo=git_repo,
+        git_branch=(body.git_branch or "").strip(),
+        git_subdir=git_subdir,
+        git_auto_update=body.git_auto_update,
     )
     db.add(s)
     db.commit()
     db.refresh(s)
     s.data_dir = str(dm.server_dir(s.id))
     # стартовые файлы — содержат бесконечный цикл чтобы контейнер не завершался
-    if egg.language == "python":
+    if not git_repo and egg.language == "python":
         fs.write_file(s.id, "main.py",
             'print("Hello from Panel!")\n\n'
             '# Держи контейнер живым — добавь сюда свой код\n'
             'import time\nwhile True:\n    time.sleep(60)\n')
-    elif egg.language == "javascript":
+    elif not git_repo and egg.language == "javascript":
         fs.write_file(s.id, "index.js",
             'console.log("Hello from Panel!");\n\n'
             '// Держи контейнер живым\n'
             'setInterval(() => {}, 60000);\n')
-    elif egg.language == "go":
+    elif not git_repo and egg.language == "go":
         fs.write_file(s.id, "main.go",
             'package main\nimport ("fmt";"time")\n'
             'func main(){\n  fmt.Println("Hello from Panel!")\n'
             '  for { time.Sleep(60 * time.Second) }\n}\n')
-    elif egg.language == "bash":
+    elif not git_repo and egg.language == "bash":
         fs.write_file(s.id, "start.sh",
             '#!/bin/bash\necho "Hello from Panel!"\n\n'
             '# Держи контейнер живым\nwhile true; do sleep 60; done\n')
@@ -388,13 +483,16 @@ def power(sid: int, action: str, db: Session = Depends(get_db), user: User = Dep
     ports = _parse_json(s.ports, [])
     env = _parse_json(s.env_vars, {})
     cmd = s.startup_cmd or s.egg.default_cmd
+    git_message = ""
     if action == "start":
+        git_message = _sync_server_repo(s)
         if not dm.inspect(s.id):
             dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
         dm.start(s.id)
     elif action == "stop":
         dm.stop(s.id)
     elif action == "restart":
+        git_message = _sync_server_repo(s)
         if not dm.inspect(s.id):
             dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
             dm.start(s.id)
@@ -403,13 +501,14 @@ def power(sid: int, action: str, db: Session = Depends(get_db), user: User = Dep
     elif action == "kill":
         dm.kill(s.id)
     elif action == "rebuild":
+        git_message = _sync_server_repo(s)
         dm.remove(s.id)
         dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
     else:
         raise HTTPException(400, "Unknown action")
     s.status = dm.status(s.id)
     db.commit()
-    return {"status": s.status}
+    return {"status": s.status, "message": git_message}
 
 
 @app.get("/api/servers/{sid}/stats")
@@ -604,6 +703,12 @@ def update_server(sid: int, body: ServerUpdate, db: Session = Depends(get_db),
     if body.startup_cmd is not None: s.startup_cmd = body.startup_cmd
     if body.ports is not None: s.ports = json.dumps([p.model_dump() for p in body.ports])
     if body.env_vars is not None: s.env_vars = json.dumps(body.env_vars)
+    if body.git_repo is not None: s.git_repo = (body.git_repo or "").strip()
+    if body.git_branch is not None: s.git_branch = (body.git_branch or "").strip()
+    if body.git_subdir is not None: s.git_subdir = _clean_git_subdir(body.git_subdir)
+    if body.git_auto_update is not None: s.git_auto_update = body.git_auto_update
+    if s.git_auto_update and not (s.git_repo or "").strip():
+        raise HTTPException(400, "Git repository URL is required for auto-update")
     db.commit()
     return _server_dto(s)
 

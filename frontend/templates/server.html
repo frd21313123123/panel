@@ -207,6 +207,19 @@
         <div class="form-group"><label>Команда запуска</label><input id="setCmd"></div>
         <div class="form-group"><label>RAM (MB)</label><input id="setMem" type="number"></div>
         <div class="form-group"><label>CPU (%)</label><input id="setCpu" type="number"></div>
+        <hr>
+        <h3 style="margin-bottom:4px">GitHub автообновление</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          Если включено, перед стартом/рестартом панель сама обновит код через <code>git clone</code> или <code>git pull</code>.
+          Папка должна быть пустой либо уже быть git-репозиторием без локальных изменений.
+        </div>
+        <div class="form-group"><label>Git URL</label><input id="setGitRepo" placeholder="https://github.com/user/repo.git"></div>
+        <div class="form-group"><label>Ветка</label><input id="setGitBranch" placeholder="main"></div>
+        <div class="form-group"><label>Папка внутри сервера</label><input id="setGitSubdir" placeholder="Например: bot"></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:14px;margin:10px 0 14px;">
+          <input id="setGitAuto" type="checkbox">
+          <span>Обновлять код перед стартом/рестартом</span>
+        </label>
         <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
         <span class="muted" style="margin-left:10px">Лимиты применяются после «Пересоздать».</span>
       </div>
@@ -247,6 +260,10 @@ async function loadServer() {
   document.getElementById("setCmd").value = server.startup_cmd;
   document.getElementById("setMem").value = server.memory_mb;
   document.getElementById("setCpu").value = server.cpu_limit;
+  document.getElementById("setGitRepo").value = server.git_repo || "";
+  document.getElementById("setGitBranch").value = server.git_branch || "";
+  document.getElementById("setGitSubdir").value = server.git_subdir || "";
+  document.getElementById("setGitAuto").checked = !!server.git_auto_update;
 }
 
 function setStatus(s) {
@@ -272,6 +289,7 @@ async function power(action) {
   try {
     const r = await api.post(`/api/servers/${SID}/power/${action}`);
     setStatus(r.status);
+    if (r.message) termLog(r.message, "\x1b[36m");
     termLog(`Статус: ${r.status}`, _statusAnsi[r.status] || "\x1b[36m");
   } catch (e) {
     termLog(`Ошибка: ${e.message}`, "\x1b[31m");
@@ -594,6 +612,10 @@ async function saveSettings(){
       startup_cmd: document.getElementById("setCmd").value,
       memory_mb: parseInt(document.getElementById("setMem").value),
       cpu_limit: parseInt(document.getElementById("setCpu").value),
+      git_repo: document.getElementById("setGitRepo").value,
+      git_branch: document.getElementById("setGitBranch").value,
+      git_subdir: document.getElementById("setGitSubdir").value,
+      git_auto_update: document.getElementById("setGitAuto").checked,
     })});
     toast("Сохранено","success"); loadServer();
   } catch(e){ toast(e.message,"error"); }

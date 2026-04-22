@@ -142,6 +142,30 @@ async function openCreate() {
             <label>Команда запуска (опционально)</label>
             <input name="startup_cmd" placeholder="Если пусто — используется команда из шаблона">
           </div>
+          <div class="card" style="padding:12px;background:var(--bg-3);margin:10px 0;">
+            <div style="font-weight:600;margin-bottom:4px">GitHub автообновление</div>
+            <div class="muted" style="font-size:12px;margin-bottom:10px">
+              Перед стартом панель сможет сама сделать <code>git clone</code> или <code>git pull</code> в папке сервера.
+            </div>
+            <div class="form-group">
+              <label>Git URL</label>
+              <input name="git_repo" placeholder="https://github.com/user/repo.git">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div class="form-group">
+                <label>Ветка</label>
+                <input name="git_branch" placeholder="main">
+              </div>
+              <div class="form-group">
+                <label>Папка внутри сервера</label>
+                <input name="git_subdir" placeholder="Например: bot">
+              </div>
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;">
+              <input name="git_auto_update" type="checkbox">
+              <span>Обновлять из Git перед стартом/рестартом</span>
+            </label>
+          </div>
           <div class="modal-actions">
             <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
             <button class="btn btn-primary">Создать сервер</button>
@@ -160,6 +184,10 @@ async function openCreate() {
         cpu_limit: parseInt(fd.get("cpu_limit")),
         disk_mb: parseInt(fd.get("disk_mb")),
         startup_cmd: fd.get("startup_cmd") || "",
+        git_repo: fd.get("git_repo") || "",
+        git_branch: fd.get("git_branch") || "",
+        git_subdir: fd.get("git_subdir") || "",
+        git_auto_update: fd.get("git_auto_update") === "on",
       });
       closeModal();
       toast("Сервер создан", "success");
