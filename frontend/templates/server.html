@@ -56,6 +56,20 @@
           </div>
           <div style="height:110px;margin-top:6px;"><canvas id="memChart"></canvas></div>
         </div>
+        <div class="stat" style="padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">Сеть (↓ rx / ↑ tx)</span>
+            <span class="value" id="stNet" style="font-size:14px;">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="netChart"></canvas></div>
+        </div>
+        <div class="stat" style="padding:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span class="label">Диск</span>
+            <span class="value" id="stDisk" style="font-size:18px;">—</span>
+          </div>
+          <div style="height:110px;margin-top:6px;"><canvas id="diskChart"></canvas></div>
+        </div>
       </div>
       <div class="stat-grid" style="margin-top:12px;">
         <div class="stat"><div class="label">Status</div><div class="value" id="stStatus">—</div></div>
@@ -254,48 +268,48 @@ async function deleteServer() {
 
 // ---------- Stats polling + charts ----------
 const MAX_POINTS = 30;
-let cpuChart = null, memChart = null;
+let cpuChart = null, memChart = null, netChart = null, diskChart = null;
 let lastStatus = null;
+let prevNet = null;  // { t, rx, tx } for delta calc
 
-function buildChart(ctx, color, yFmt) {
+function buildChart(ctx, color, yFmt, extraDataset) {
+  const datasets = [{
+    data: Array(MAX_POINTS).fill(null),
+    borderColor: color,
+    backgroundColor: color + "22",
+    borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0,
+  }];
+  if (extraDataset) datasets.push(extraDataset);
   return new Chart(ctx, {
     type: "line",
-    data: {
-      labels: Array(MAX_POINTS).fill(""),
-      datasets: [{
-        data: Array(MAX_POINTS).fill(null),
-        borderColor: color,
-        backgroundColor: color + "22",
-        borderWidth: 2,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-      }]
-    },
+    data: { labels: Array(MAX_POINTS).fill(""), datasets },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      animation: false,
+      responsive: true, maintainAspectRatio: false, animation: false,
       plugins: { legend: { display: false }, tooltip: { enabled: false } },
       scales: {
         x: { display: false },
-        y: {
-          beginAtZero: true,
-          ticks: { color: "#8a97a5", font: { size: 10 }, maxTicksLimit: 4, callback: yFmt },
-          grid: { color: "#2d3843" },
-        }
+        y: { beginAtZero: true,
+             ticks: { color: "#8a97a5", font: { size: 10 }, maxTicksLimit: 4, callback: yFmt },
+             grid: { color: "#2d3843" } }
       }
     }
   });
 }
 
 function initCharts() {
-  cpuChart = buildChart(document.getElementById("cpuChart"), "#22d3ee", v => v + "%");
-  memChart = buildChart(document.getElementById("memChart"), "#10b981", v => fmtBytes(v));
+  cpuChart  = buildChart(document.getElementById("cpuChart"),  "#22d3ee", v => v + "%");
+  memChart  = buildChart(document.getElementById("memChart"),  "#10b981", v => fmtBytes(v));
+  diskChart = buildChart(document.getElementById("diskChart"), "#f59e0b", v => fmtBytes(v));
+  netChart  = buildChart(document.getElementById("netChart"),  "#3b82f6", v => fmtBytes(v) + "/s", {
+    data: Array(MAX_POINTS).fill(null),
+    borderColor: "#ef4444", backgroundColor: "#ef444422",
+    borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0,
+  });
 }
 
-function pushPoint(chart, v) {
-  chart.data.datasets[0].data.push(v);
-  chart.data.datasets[0].data.shift();
+function pushPoint(chart, v, ds = 0) {
+  chart.data.datasets[ds].data.push(v);
+  chart.data.datasets[ds].data.shift();
   chart.update("none");
 }
 
@@ -304,8 +318,26 @@ async function pollStats() {
     const d = await api.get(`/api/servers/${SID}/stats`);
     document.getElementById("stCpu").textContent = d.cpu + " %";
     document.getElementById("stMem").textContent = fmtBytes(d.mem) + " / " + fmtBytes(d.mem_limit);
-    if (cpuChart) pushPoint(cpuChart, d.cpu);
-    if (memChart) pushPoint(memChart, d.mem);
+    document.getElementById("stDisk").textContent = fmtBytes(d.disk || 0);
+
+    const now = Date.now();
+    let rxRate = 0, txRate = 0;
+    if (prevNet && d.status === "running") {
+      const dt = (now - prevNet.t) / 1000;
+      if (dt > 0) {
+        rxRate = Math.max(0, (d.net_rx - prevNet.rx) / dt);
+        txRate = Math.max(0, (d.net_tx - prevNet.tx) / dt);
+      }
+    }
+    prevNet = { t: now, rx: d.net_rx || 0, tx: d.net_tx || 0 };
+    document.getElementById("stNet").textContent =
+      fmtBytes(rxRate) + "/s ↓ · " + fmtBytes(txRate) + "/s ↑";
+
+    if (cpuChart)  pushPoint(cpuChart,  d.cpu);
+    if (memChart)  pushPoint(memChart,  d.mem);
+    if (diskChart) pushPoint(diskChart, d.disk || 0);
+    if (netChart) { pushPoint(netChart, rxRate, 0); pushPoint(netChart, txRate, 1); }
+
     if (d.status !== lastStatus) {
       if (lastStatus !== null) termLog(`Статус контейнера: ${d.status}`, _statusAnsi[d.status] || "\x1b[36m");
       lastStatus = d.status;

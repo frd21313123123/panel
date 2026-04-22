@@ -1,10 +1,34 @@
 """Обёртка над Docker SDK для управления контейнерами-"серверами"."""
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Optional
 import docker
 from docker.errors import NotFound, APIError
+
+_disk_cache: dict = {}  # server_id -> (timestamp, size_bytes)
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path, followlinks=False):
+        for f in files:
+            try:
+                total += (Path(root) / f).stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def disk_usage(server_id: int, ttl: float = 10.0) -> int:
+    now = time.time()
+    cached = _disk_cache.get(server_id)
+    if cached and now - cached[0] < ttl:
+        return cached[1]
+    sz = _dir_size(server_dir(server_id))
+    _disk_cache[server_id] = (now, sz)
+    return sz
 
 DATA_ROOT = Path(os.environ.get("PANEL_DATA_ROOT", "./data/servers")).resolve()
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
@@ -164,8 +188,11 @@ def status(server_id: int) -> str:
 
 def stats(server_id: int) -> dict:
     c = inspect(server_id)
+    disk = disk_usage(server_id)
+    base = {"cpu": 0, "mem": 0, "mem_limit": 0, "disk": disk,
+            "net_rx": 0, "net_tx": 0, "status": "offline"}
     if not c:
-        return {"cpu": 0, "mem": 0, "mem_limit": 0, "status": "offline"}
+        return base
     try:
         s = c.stats(stream=False)
         cpu_delta = s["cpu_stats"]["cpu_usage"]["total_usage"] - s["precpu_stats"]["cpu_usage"]["total_usage"]
@@ -176,9 +203,16 @@ def stats(server_id: int) -> dict:
             cpu_pct = (cpu_delta / sys_delta) * online * 100.0
         mem = s["memory_stats"].get("usage", 0)
         mem_limit = s["memory_stats"].get("limit", 0)
-        return {"cpu": round(cpu_pct, 2), "mem": mem, "mem_limit": mem_limit, "status": c.status}
+        net_rx = 0
+        net_tx = 0
+        for iface in (s.get("networks") or {}).values():
+            net_rx += iface.get("rx_bytes", 0)
+            net_tx += iface.get("tx_bytes", 0)
+        return {"cpu": round(cpu_pct, 2), "mem": mem, "mem_limit": mem_limit,
+                "disk": disk, "net_rx": net_rx, "net_tx": net_tx, "status": c.status}
     except Exception:
-        return {"cpu": 0, "mem": 0, "mem_limit": 0, "status": c.status}
+        base["status"] = c.status
+        return base
 
 
 def logs(server_id: int, tail: int = 200) -> str:
