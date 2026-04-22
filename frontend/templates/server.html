@@ -278,7 +278,7 @@ function escAttr(s){return String(s||'').replace(/'/g,"\\'");}
 function parentPath(p){const i=p.lastIndexOf("/");return i<0?"":p.slice(0,i);}
 function renderCrumb(p){if(!p)return "/";let acc="";return "/ "+p.split("/").map(x=>{acc=acc?acc+"/"+x:x;return `<a onclick="loadFiles('${escAttr(acc)}')">${escapeHtml(x)}</a>`;}).join(" / ");}
 
-const ARCHIVE_EXTS = ['.zip','.tar','.tar.gz','.tgz','.tar.bz2','.tbz2','.tar.xz','.txz','.gz','.bz2'];
+const ARCHIVE_EXTS = ['.zip','.tar','.tar.gz','.tgz','.tar.bz2','.tbz2','.tar.xz','.txz','.gz','.bz2','.7z'];
 function isArchive(name){ const n = name.toLowerCase(); return ARCHIVE_EXTS.some(e => n.endsWith(e)); }
 
 async function loadFiles(path) {

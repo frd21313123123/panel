@@ -10,7 +10,7 @@ from docker_manager import server_dir
 
 ARCHIVE_EXTS = {
     ".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-    ".tar.xz", ".txz", ".tar.zst", ".gz", ".bz2",
+    ".tar.xz", ".txz", ".tar.zst", ".gz", ".bz2", ".7z",
 }
 
 
@@ -158,6 +158,19 @@ def extract_archive(server_id: int, rel: str, dest_rel: str = "") -> int:
         with bz2.open(src, "rb") as sf, open(out, "wb") as df:
             shutil.copyfileobj(sf, df)
         count = 1
+
+    elif name.endswith(".7z"):
+        import py7zr
+        with py7zr.SevenZipFile(src, mode="r") as zf:
+            for fname, bio in zf.read().items():
+                out = safe_dest(fname)
+                if bio is None:
+                    out.mkdir(parents=True, exist_ok=True)
+                else:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out, "wb") as df:
+                        shutil.copyfileobj(bio, df)
+                    count += 1
 
     else:
         raise HTTPException(400, f"Unsupported archive format: {src.name}")
