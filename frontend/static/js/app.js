@@ -1,4 +1,65 @@
 // Panel client utilities
+// ---------- Task bar ----------
+const _taskbar = (() => {
+  let el = null;
+  let _sid = null;
+  let _poll = null;
+
+  function mount() {
+    if (el) return;
+    el = document.createElement("div");
+    el.className = "taskbar";
+    document.body.appendChild(el);
+  }
+
+  function render(tasks) {
+    mount();
+    el.innerHTML = tasks.map(t => {
+      const barClass = t.status === "done" ? "done" : t.status === "error" ? "error" : t.progress < 5 ? "indeterminate" : "";
+      const width = (t.status === "running" && t.progress < 5) ? "40%" : t.progress + "%";
+      return `<div class="task-item" id="task-${t.id}">
+        <div class="task-title">
+          <span>${escHtml(t.title)}</span>
+          ${t.status !== "running" ? `<span class="task-close" onclick="taskbar.dismiss('${t.id}')">✕</span>` : ""}
+        </div>
+        ${t.message ? `<div class="task-msg">${escHtml(t.message)}</div>` : ""}
+        <div class="progress-track">
+          <div class="progress-bar ${barClass}" style="width:${width}"></div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  function escHtml(s) { return String(s||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+  function startPolling(sid) {
+    _sid = sid;
+    if (_poll) return;
+    _poll = setInterval(async () => {
+      try {
+        const tasks = await api.get(`/api/servers/${_sid}/tasks`);
+        if (tasks.length) render(tasks);
+        else if (el) el.innerHTML = "";
+        // auto-remove done/error after 4s
+        tasks.forEach(t => {
+          if (t.status !== "running") {
+            setTimeout(() => dismiss(t.id), 4000);
+          }
+        });
+      } catch (e) {}
+    }, 800);
+  }
+
+  async function dismiss(id) {
+    try { await api.del(`/api/tasks/${id}`); } catch (e) {}
+    const item = document.getElementById("task-" + id);
+    if (item) item.remove();
+  }
+
+  return { startPolling, dismiss, render };
+})();
+
+const taskbar = _taskbar;
 const api = {
   async req(path, opts = {}) {
     const res = await fetch(path, {

@@ -13,11 +13,13 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from database import init_db, get_db, User, Server, Egg, Subuser, Schedule, Backup, SessionLocal
+import threading
 import auth
 import docker_manager as dm
 import files as fs
 import backups as bk
 import scheduler
+import tasks as tk
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -460,8 +462,19 @@ class ExtractIn(BaseModel):
 def extract(sid: int, body: ExtractIn, db: Session = Depends(get_db),
             user: User = Depends(auth.get_current_user)):
     s = _server_for(db, sid, user, "files")
-    count = fs.extract_archive(s.id, body.path, body.dest)
-    return {"ok": True, "files_extracted": count}
+    fname = body.path.split("/")[-1]
+    tid = tk.create(f"Распаковка: {fname}", server_id=s.id)
+
+    def _run():
+        try:
+            tk.update(tid, progress=5, message="Открываю архив…")
+            count = fs.extract_archive(s.id, body.path, body.dest)
+            tk.finish(tid, message=f"Готово — {count} файлов")
+        except Exception as e:
+            tk.fail(tid, message=str(e))
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "task_id": tid}
 
 
 # ---------- Users Admin ----------
@@ -589,13 +602,18 @@ async def upload_file(sid: int, path: str = "", file: UploadFile = File(...),
                       db: Session = Depends(get_db), user: User = Depends(auth.get_current_user)):
     s = _server_for(db, sid, user, "files")
     target_rel = (path.rstrip("/\\") + "/" + file.filename) if path else file.filename
+    tid = tk.create(f"Загрузка: {file.filename}", server_id=s.id)
+    tk.update(tid, progress=10, message="Принимаю файл…")
     content = await file.read()
     if len(content) > 100 * 1024 * 1024:
+        tk.fail(tid, "Файл >100MB")
         raise HTTPException(413, "File too large (>100MB)")
+    tk.update(tid, progress=70, message="Сохраняю…")
     p = fs._safe(s.id, target_rel)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content)
-    return {"ok": True, "path": target_rel, "size": len(content)}
+    tk.finish(tid, message=f"Загружено: {target_rel}")
+    return {"ok": True, "path": target_rel, "size": len(content), "task_id": tid}
 
 
 @app.get("/api/servers/{sid}/files/download")
@@ -812,6 +830,20 @@ async def term_ws(websocket: WebSocket, sid: int, token: Optional[str] = None,
         rtask.cancel()
         try: sock.close()
         except Exception: pass
+
+
+# ---------- Tasks ----------
+@app.get("/api/servers/{sid}/tasks")
+def list_tasks(sid: int, db: Session = Depends(get_db),
+               user: User = Depends(auth.get_current_user)):
+    _server_for(db, sid, user)
+    return tk.for_server(sid)
+
+
+@app.delete("/api/tasks/{tid}")
+def delete_task(tid: str, _: User = Depends(auth.get_current_user)):
+    tk.delete(tid)
+    return {"ok": True}
 
 
 if __name__ == "__main__":

@@ -330,12 +330,34 @@ async function delFile(path){if(!confirm(`Удалить ${path}?`))return;await
 async function newFile(){const n=prompt("Имя файла:");if(!n)return;await api.post(`/api/servers/${SID}/files/write`,{path:curPath?curPath+"/"+n:n,content:""});loadFiles(curPath);}
 async function newDir(){const n=prompt("Имя папки:");if(!n)return;await api.post(`/api/servers/${SID}/files/mkdir`,{path:curPath?curPath+"/"+n:n});loadFiles(curPath);}
 function dlFile(path){window.location.href=`/api/servers/${SID}/files/download?path=${encodeURIComponent(path)}`;}
-async function doUpload(ev){
+function doUpload(ev){
   const f=ev.target.files[0]; if(!f)return;
-  const fd=new FormData(); fd.append("file",f);
-  const res=await fetch(`/api/servers/${SID}/files/upload?path=${encodeURIComponent(curPath)}`,{method:"POST",body:fd,credentials:"include"});
-  if(res.ok){toast("Загружено","success");loadFiles(curPath);} else toast("Ошибка загрузки","error");
   ev.target.value="";
+  const fd=new FormData(); fd.append("file",f);
+  const xhr=new XMLHttpRequest();
+  const tid="upload-"+Date.now();
+
+  // Показываем задачу сразу локально
+  taskbar.render([{id:tid,title:`Загрузка: ${f.name}`,status:"running",progress:0,message:"Подготовка…"}]);
+
+  xhr.upload.onprogress = e => {
+    if(!e.lengthComputable) return;
+    const pct = Math.round(e.loaded/e.total*90);
+    taskbar.render([{id:tid,title:`Загрузка: ${f.name}`,status:"running",progress:pct,message:`${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`}]);
+  };
+  xhr.onload = () => {
+    if(xhr.status===200){
+      taskbar.render([{id:tid,title:`Загрузка: ${f.name}`,status:"done",progress:100,message:"Загружено"}]);
+      setTimeout(()=>{ taskbar.dismiss(tid); },4000);
+      loadFiles(curPath);
+    } else {
+      taskbar.render([{id:tid,title:`Загрузка: ${f.name}`,status:"error",progress:0,message:"Ошибка загрузки"}]);
+    }
+  };
+  xhr.onerror = () => taskbar.render([{id:tid,title:`Загрузка: ${f.name}`,status:"error",progress:0,message:"Сетевая ошибка"}]);
+  xhr.open("POST",`/api/servers/${SID}/files/upload?path=${encodeURIComponent(curPath)}`);
+  xhr.withCredentials=true;
+  xhr.send(fd);
 }
 
 // ---------- Backups ----------
@@ -446,7 +468,7 @@ async function saveSettings(){
   } catch(e){ toast(e.message,"error"); }
 }
 
-(async () => { await loadServer(); connectStats(); initTerm(); })();
+(async () => { await loadServer(); connectStats(); initTerm(); taskbar.startPolling(SID); })();
 </script>
 </body>
 </html>
