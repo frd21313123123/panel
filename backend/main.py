@@ -338,15 +338,26 @@ def create_server(body: ServerCreate, db: Session = Depends(get_db), user: User 
     db.commit()
     db.refresh(s)
     s.data_dir = str(dm.server_dir(s.id))
-    # заготовка стартового файла
+    # стартовые файлы — содержат бесконечный цикл чтобы контейнер не завершался
     if egg.language == "python":
-        fs.write_file(s.id, "main.py", 'print("Hello from Panel!")\n')
+        fs.write_file(s.id, "main.py",
+            'print("Hello from Panel!")\n\n'
+            '# Держи контейнер живым — добавь сюда свой код\n'
+            'import time\nwhile True:\n    time.sleep(60)\n')
     elif egg.language == "javascript":
-        fs.write_file(s.id, "index.js", 'console.log("Hello from Panel!");\n')
+        fs.write_file(s.id, "index.js",
+            'console.log("Hello from Panel!");\n\n'
+            '// Держи контейнер живым\n'
+            'setInterval(() => {}, 60000);\n')
     elif egg.language == "go":
-        fs.write_file(s.id, "main.go", 'package main\nimport "fmt"\nfunc main(){ fmt.Println("Hello from Panel!") }\n')
+        fs.write_file(s.id, "main.go",
+            'package main\nimport ("fmt";"time")\n'
+            'func main(){\n  fmt.Println("Hello from Panel!")\n'
+            '  for { time.Sleep(60 * time.Second) }\n}\n')
     elif egg.language == "bash":
-        fs.write_file(s.id, "start.sh", 'echo "Hello from Panel!"\n')
+        fs.write_file(s.id, "start.sh",
+            '#!/bin/bash\necho "Hello from Panel!"\n\n'
+            '# Держи контейнер живым\nwhile true; do sleep 60; done\n')
     db.commit()
     return _server_dto(s)
 
