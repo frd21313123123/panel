@@ -60,7 +60,14 @@
 
     <div id="tab-console">
       <div class="card">
-        <div id="term" style="height:480px;background:#000;padding:6px;border-radius:4px;"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <span style="font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;">Журнал событий</span>
+          <button class="btn btn-secondary" style="padding:3px 10px;font-size:11px;" onclick="clearLog()">Очистить</button>
+        </div>
+        <div id="panelLog" style="background:#0a0e12;border:1px solid var(--border);border-radius:4px;padding:10px 14px;height:160px;overflow-y:auto;font-family:'Consolas','Monaco',monospace;font-size:12px;line-height:1.6;color:#d1d5db;"></div>
+      </div>
+      <div class="card">
+        <div id="term" style="height:420px;background:#000;padding:6px;border-radius:4px;"></div>
         <div style="margin-top:8px;" class="muted">Интерактивный TTY через docker exec. Запусти сервер и подключись.</div>
         <div style="margin-top:8px;">
           <button class="btn btn-secondary" onclick="connectTerm('/bin/sh')">Подключить sh</button>
@@ -208,12 +215,34 @@ function setStatus(s) {
   document.getElementById("stStatus").textContent = s;
 }
 
+const _actionLabel = { start:"▶ Запуск", restart:"↻ Рестарт", stop:"■ Остановка", kill:"✕ Kill", rebuild:"🔧 Пересоздание" };
+const _statusColor = { running:"#10b981", exited:"#ef4444", offline:"#ef4444", starting:"#f59e0b", paused:"#f59e0b" };
+
+function panelLog(msg, color) {
+  const box = document.getElementById("panelLog");
+  if (!box) return;
+  const now = new Date();
+  const ts = now.toTimeString().slice(0,8);
+  const line = document.createElement("div");
+  line.style.color = color || "#d1d5db";
+  line.textContent = `[${ts}] ${msg}`;
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+function clearLog() { const b = document.getElementById("panelLog"); if(b) b.innerHTML = ""; }
+
 async function power(action) {
+  const label = _actionLabel[action] || action;
+  panelLog(`${label}…`, "#f59e0b");
   try {
     const r = await api.post(`/api/servers/${SID}/power/${action}`);
     setStatus(r.status);
-    toast(`${action}: ${r.status}`, "success");
-  } catch (e) { toast(e.message, "error"); }
+    const col = _statusColor[r.status] || "#d1d5db";
+    panelLog(`Статус: ${r.status}`, col);
+  } catch (e) {
+    panelLog(`Ошибка: ${e.message}`, "#ef4444");
+    toast(e.message, "error");
+  }
 }
 
 async function deleteServer() {
