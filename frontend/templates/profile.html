@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Профиль</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/admin">⚙️ Администрирование</a>
+      <a href="/profile">👤 Профиль</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar"><h1>Профиль</h1></div>
+
+    <div class="card" style="max-width:500px">
+      <h3 style="margin-bottom:14px">Информация об аккаунте</h3>
+      <div id="info" class="muted">загрузка…</div>
+    </div>
+
+    <div class="card" style="max-width:500px">
+      <h3 style="margin-bottom:14px">Сменить пароль</h3>
+      <form id="pwForm">
+        <div class="form-group">
+          <label>Текущий пароль</label>
+          <input type="password" name="current_password" required>
+        </div>
+        <div class="form-group">
+          <label>Новый пароль</label>
+          <input type="password" name="new_password" required minlength="4">
+        </div>
+        <div class="form-group">
+          <label>Повторите новый пароль</label>
+          <input type="password" name="confirm" required minlength="4">
+        </div>
+        <button class="btn btn-primary">Сменить пароль</button>
+      </form>
+    </div>
+  </main>
+</div>
+<script src="/static/js/app.js"></script>
+<script>
+loadSidebar("/profile");
+
+async function loadInfo() {
+  const me = await api.get("/api/auth/me");
+  document.getElementById("info").innerHTML = `
+    <table>
+      <tr><th>ID</th><td>${me.id}</td></tr>
+      <tr><th>Имя пользователя</th><td><b>${escapeHtml(me.username)}</b></td></tr>
+      <tr><th>Email</th><td>${escapeHtml(me.email)}</td></tr>
+      <tr><th>Роль</th><td>${me.is_admin ? '<span class="pill running">admin</span>' : 'user'}</td></tr>
+    </table>`;
+}
+
+function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+document.getElementById("pwForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  if (fd.get("new_password") !== fd.get("confirm")) {
+    toast("Пароли не совпадают", "error"); return;
+  }
+  try {
+    await api.post("/api/auth/change-password", {
+      current_password: fd.get("current_password"),
+      new_password: fd.get("new_password"),
+    });
+    toast("Пароль изменён", "success");
+    e.target.reset();
+  } catch (err) { toast(err.message, "error"); }
+});
+
+loadInfo();
+</script>
+</body>
+</html>

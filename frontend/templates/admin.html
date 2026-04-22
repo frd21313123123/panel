@@ -12,6 +12,7 @@
     <nav>
       <a href="/dashboard">📦 Мои серверы</a>
       <a href="/admin">⚙️ Администрирование</a>
+      <a href="/profile">👤 Профиль</a>
     </nav>
     <div class="spacer"></div>
     <div class="user">загрузка…</div>
@@ -73,13 +74,24 @@ async function loadUsers() {
         <td>${u.id}</td><td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.email)}</td>
         <td>${u.is_admin ? '<span class="pill running">admin</span>' : 'user'}</td>
         <td class="muted">${u.created_at.slice(0,10)}</td>
-        <td><button class="btn btn-danger" onclick="delUser(${u.id})">Удалить</button></td>
+        <td>
+          <button class="btn btn-secondary" onclick="resetPw(${u.id})">Сброс пароля</button>
+          <button class="btn btn-danger" onclick="delUser(${u.id})">Удалить</button>
+        </td>
       </tr>`).join("");
   } catch (e) { toast(e.message, "error"); }
 }
 async function delUser(id) {
   if (!confirm("Удалить пользователя и все его серверы?")) return;
   try { await api.del(`/api/users/${id}`); loadUsers(); } catch (e) { toast(e.message, "error"); }
+}
+async function resetPw(id) {
+  const pw = prompt("Новый пароль:");
+  if (!pw) return;
+  try {
+    await api.post(`/api/users/${id}/reset-password`, { new_password: pw });
+    toast("Пароль сброшен", "success");
+  } catch (e) { toast(e.message, "error"); }
 }
 
 async function loadEggs() {

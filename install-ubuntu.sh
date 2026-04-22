@@ -57,7 +57,20 @@ systemctl enable --now panel
 sleep 2
 systemctl status panel --no-pager || true
 
+echo "[+] Настройка nginx..."
+apt-get install -y nginx
+cp nginx.conf /etc/nginx/sites-available/panel
+ln -sf /etc/nginx/sites-available/panel /etc/nginx/sites-enabled/panel
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl reload nginx
+
 echo ""
-echo "[✓] Установка завершена. Panel запущен на http://<server-ip>:8080"
-echo "    Логин по умолчанию: admin / admin (СМЕНИТЕ ПАРОЛЬ!)"
+echo "[✓] Установка завершена!"
+echo "    Panel запущен на http://<server-ip>"
+echo "    Логин по умолчанию: admin / admin  ← СМЕНИТЕ ПАРОЛЬ!"
+echo ""
+echo "    Добавить SSL (Let's Encrypt):"
+echo "      apt install certbot python3-certbot-nginx"
+echo "      certbot --nginx -d your.domain.com"
+echo ""
 echo "    Логи: journalctl -u panel -f"

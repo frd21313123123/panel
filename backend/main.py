@@ -105,6 +105,15 @@ class BackupIn(BaseModel):
     name: str = "backup"
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str
+
+
 class FileWrite(BaseModel):
     path: str
     content: str
@@ -153,6 +162,11 @@ def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
 
 
+@app.get("/profile", response_class=HTMLResponse)
+def profile_page(request: Request):
+    return templates.TemplateResponse("profile.html", {"request": request})
+
+
 # ---------- Auth API ----------
 @app.post("/api/auth/register")
 def register(body: RegisterIn, db: Session = Depends(get_db)):
@@ -189,6 +203,31 @@ def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie("panel_token")
     return resp
+
+
+@app.post("/api/auth/change-password")
+def change_password(body: PasswordChange, user: User = Depends(auth.get_current_user),
+                    db: Session = Depends(get_db)):
+    if not auth.verify_password(body.current_password, user.password_hash):
+        raise HTTPException(400, "Current password is incorrect")
+    if len(body.new_password) < 4:
+        raise HTTPException(400, "Password must be at least 4 characters")
+    user.password_hash = auth.hash_password(body.new_password)
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/users/{uid}/reset-password")
+def admin_reset_password(uid: int, body: AdminPasswordReset,
+                         db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):
+    u = db.query(User).get(uid)
+    if not u:
+        raise HTTPException(404, "Not found")
+    if len(body.new_password) < 4:
+        raise HTTPException(400, "Password too short")
+    u.password_hash = auth.hash_password(body.new_password)
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/auth/me")
