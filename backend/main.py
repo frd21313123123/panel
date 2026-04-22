@@ -169,22 +169,21 @@ def profile_page(request: Request):
 
 # ---------- Auth API ----------
 @app.post("/api/auth/register")
-def register(body: RegisterIn, db: Session = Depends(get_db)):
+def register(body: RegisterIn, db: Session = Depends(get_db),
+             admin: User = Depends(auth.require_admin)):
+    """Создание новых пользователей — только для администратора."""
     if db.query(User).filter((User.username == body.username) | (User.email == body.email)).first():
         raise HTTPException(400, "Username or email already exists")
     u = User(
         username=body.username,
         email=body.email,
         password_hash=auth.hash_password(body.password),
-        is_admin=(db.query(User).count() == 0),
+        is_admin=False,
     )
     db.add(u)
     db.commit()
     db.refresh(u)
-    token = auth.create_token({"sub": u.id, "username": u.username})
-    resp = JSONResponse({"token": token, "username": u.username, "is_admin": u.is_admin})
-    resp.set_cookie("panel_token", token, httponly=True, max_age=60 * 60 * 24 * 7, samesite="lax")
-    return resp
+    return {"id": u.id, "username": u.username}
 
 
 @app.post("/api/auth/login")
