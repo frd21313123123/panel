@@ -222,22 +222,19 @@ async function deleteServer() {
   catch (e) { toast(e.message, "error"); }
 }
 
-// ---------- Stats over WS ----------
-function connectStats() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  statsWs = new WebSocket(`${proto}://${location.host}/ws/servers/${SID}/console`);
-  statsWs.onmessage = ev => {
-    const m = JSON.parse(ev.data);
-    if (m.type === "stats") {
-      document.getElementById("stCpu").textContent = m.data.cpu + " %";
-      document.getElementById("stMem").textContent = fmtBytes(m.data.mem) + " / " + fmtBytes(m.data.mem_limit);
-      setStatus(m.data.status);
-    }
-  };
+// ---------- Stats polling ----------
+async function pollStats() {
+  try {
+    const d = await api.get(`/api/servers/${SID}/stats`);
+    document.getElementById("stCpu").textContent = d.cpu + " %";
+    document.getElementById("stMem").textContent = fmtBytes(d.mem) + " / " + fmtBytes(d.mem_limit);
+    setStatus(d.status);
+  } catch(e) {}
 }
-setInterval(() => {
-  if (statsWs && statsWs.readyState === 1) statsWs.send(JSON.stringify({ type: "stats" }));
-}, 3000);
+function connectStats() {
+  pollStats();
+  setInterval(pollStats, 3000);
+}
 
 // ---------- xterm ----------
 function initTerm() {
