@@ -14,11 +14,13 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
-from database import init_db, get_db, User, Server, Egg, Subuser, Schedule, Backup, SessionLocal
+from database import init_db, get_db, User, Server, Egg, Subuser, Schedule, Backup, Website, Setting, SessionLocal
 import threading
 import auth
 import docker_manager as dm
+import nginx_manager as nm
 import files as fs
+import sites_files as sfs
 import backups as bk
 import scheduler
 import tasks as tk
@@ -136,6 +138,30 @@ class PathIn(BaseModel):
     path: str
 
 
+class WebsiteIn(BaseModel):
+    name: str
+    domain: str
+    mode: str = "proxy"  # "proxy" | "static"
+    proxy_pass: str = ""
+    domains: List[str] = []
+    listen_port: int = 80
+    nginx_extra: str = ""
+    ssl_enabled: bool = False
+    is_active: bool = True
+
+
+class WebsiteUpdate(BaseModel):
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    mode: Optional[str] = None
+    proxy_pass: Optional[str] = None
+    domains: Optional[List[str]] = None
+    listen_port: Optional[int] = None
+    nginx_extra: Optional[str] = None
+    ssl_enabled: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+
 class RenameIn(BaseModel):
     path: str
     new_path: str
@@ -178,6 +204,63 @@ def admin_page(request: Request):
 @app.get("/profile", response_class=HTMLResponse)
 def profile_page(request: Request):
     return templates.TemplateResponse("profile.html", {"request": request})
+
+
+EXPERIMENTAL_FLAGS = {"experimental_websites"}
+
+
+def _get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.query(Setting).get(key)
+    return row.value if row else default
+
+
+def _flag_enabled(db: Session, key: str) -> bool:
+    return _get_setting(db, key, "false").lower() == "true"
+
+
+def _require_flag(key: str):
+    def dep(db: Session = Depends(get_db)):
+        if not _flag_enabled(db, key):
+            raise HTTPException(404, "Not found")
+    return dep
+
+
+@app.get("/websites", response_class=HTMLResponse)
+def websites_page(request: Request, db: Session = Depends(get_db)):
+    if not _flag_enabled(db, "experimental_websites"):
+        raise HTTPException(404, "Not found")
+    return templates.TemplateResponse("websites.html", {"request": request})
+
+
+# ---------- Settings API ----------
+@app.get("/api/settings/public")
+def public_settings(db: Session = Depends(get_db), _: User = Depends(auth.get_current_user)):
+    """Flags safe to expose to all logged-in users (used by frontend to toggle UI)."""
+    return {k: _flag_enabled(db, k) for k in EXPERIMENTAL_FLAGS}
+
+
+@app.get("/api/settings")
+def list_settings(db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):
+    return {k: _flag_enabled(db, k) for k in EXPERIMENTAL_FLAGS}
+
+
+class SettingIn(BaseModel):
+    key: str
+    value: bool
+
+
+@app.post("/api/settings")
+def set_setting(body: SettingIn, db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):
+    if body.key not in EXPERIMENTAL_FLAGS:
+        raise HTTPException(400, "Unknown setting key")
+    row = db.query(Setting).get(body.key)
+    val = "true" if body.value else "false"
+    if row:
+        row.value = val
+    else:
+        db.add(Setting(key=body.key, value=val))
+    db.commit()
+    return {"ok": True, "key": body.key, "value": body.value}
 
 
 # ---------- Auth API ----------
@@ -961,6 +1044,247 @@ def list_tasks(sid: int, db: Session = Depends(get_db),
 def delete_task(tid: str, _: User = Depends(auth.get_current_user)):
     tk.delete(tid)
     return {"ok": True}
+
+
+# ---------- Websites / Nginx ----------
+def _split_domains(text: str) -> list[str]:
+    if not text:
+        return []
+    return [d.strip() for d in text.replace(",", " ").split() if d.strip()]
+
+
+def _website_dto(w: Website) -> dict:
+    return {
+        "id": w.id, "name": w.name, "domain": w.domain,
+        "domains": _split_domains(w.domains or ""),
+        "mode": w.mode or "proxy",
+        "listen_port": w.listen_port or 80,
+        "proxy_pass": w.proxy_pass or "", "nginx_extra": w.nginx_extra or "",
+        "ssl_enabled": bool(w.ssl_enabled), "is_active": bool(w.is_active),
+        "webroot": str(sfs.site_dir(w.id)) if (w.mode or "proxy") == "static" else "",
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+    }
+
+
+def _apply_website(w: Website):
+    """Write config + (en|dis)able + reload. Raises HTTPException on failure."""
+    try:
+        webroot = ""
+        if (w.mode or "proxy") == "static":
+            webroot = str(sfs.site_dir(w.id))
+        cfg = nm.generate_config(
+            domain=w.domain,
+            proxy_pass=w.proxy_pass or "",
+            extra_config=w.nginx_extra or "",
+            ssl=bool(w.ssl_enabled),
+            extra_domains=_split_domains(w.domains or ""),
+            mode=w.mode or "proxy",
+            listen_port=w.listen_port or 80,
+            webroot=webroot,
+        )
+        nm.write_config(w.id, cfg)
+        if w.is_active:
+            nm.enable_site(w.id)
+        else:
+            nm.disable_site(w.id)
+        ok, msg = nm.reload_nginx()
+        if not ok:
+            raise HTTPException(400, f"nginx reload failed: {msg}")
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/websites")
+def list_websites(db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                  __=Depends(_require_flag("experimental_websites"))):
+    return [_website_dto(w) for w in db.query(Website).order_by(Website.id.desc()).all()]
+
+
+@app.post("/api/websites")
+def create_website(body: WebsiteIn, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    if body.mode not in ("proxy", "static"):
+        raise HTTPException(400, "mode must be proxy|static")
+    if body.mode == "proxy" and not body.proxy_pass:
+        raise HTTPException(400, "proxy_pass required for proxy mode")
+    if db.query(Website).filter(Website.domain == body.domain).first():
+        raise HTTPException(400, "Domain already exists")
+    data = body.model_dump()
+    data["domains"] = ",".join(body.domains or [])
+    w = Website(**data)
+    db.add(w)
+    db.commit()
+    db.refresh(w)
+    if w.mode == "static":
+        sfs.site_dir(w.id)  # ensure webroot
+    try:
+        _apply_website(w)
+    except HTTPException:
+        nm.delete_config(w.id)
+        db.delete(w)
+        db.commit()
+        raise
+    return _website_dto(w)
+
+
+@app.get("/api/websites/{wid}")
+def get_website(wid: int, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    return _website_dto(w)
+
+
+@app.patch("/api/websites/{wid}")
+def update_website(wid: int, body: WebsiteUpdate, db: Session = Depends(get_db),
+                   _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    data = body.model_dump(exclude_unset=True)
+    if "domain" in data and data["domain"] != w.domain:
+        if db.query(Website).filter(Website.domain == data["domain"]).first():
+            raise HTTPException(400, "Domain already exists")
+    if "domains" in data:
+        data["domains"] = ",".join(data["domains"] or [])
+    for k, v in data.items():
+        setattr(w, k, v)
+    db.commit()
+    _apply_website(w)
+    return _website_dto(w)
+
+
+@app.delete("/api/websites/{wid}")
+def delete_website(wid: int, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    nm.delete_config(w.id)
+    # remove webroot if any
+    try:
+        wr = sfs.site_dir(w.id)
+        if wr.exists():
+            shutil.rmtree(wr, ignore_errors=True)
+    except Exception:
+        pass
+    db.delete(w)
+    db.commit()
+    nm.reload_nginx()
+    return {"ok": True}
+
+
+# ---------- Website files (static mode) ----------
+@app.get("/api/websites/{wid}/files")
+def site_list_files(wid: int, path: str = "", db: Session = Depends(get_db),
+                    _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    return {"path": path, "items": sfs.list_dir(w.id, path)}
+
+
+@app.post("/api/websites/{wid}/files/delete")
+def site_delete_file(wid: int, body: PathIn, db: Session = Depends(get_db),
+                     _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    sfs.delete_path(w.id, body.path)
+    return {"ok": True}
+
+
+@app.post("/api/websites/{wid}/files/mkdir")
+def site_mkdir(wid: int, body: PathIn, db: Session = Depends(get_db),
+               _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    sfs.create_dir(w.id, body.path)
+    return {"ok": True}
+
+
+@app.post("/api/websites/{wid}/files/upload")
+async def site_upload(wid: int, path: str = "", file: UploadFile = File(...),
+                      auto_extract: bool = True,
+                      db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    target_rel = (path.rstrip("/\\") + "/" + file.filename) if path else file.filename
+    content = await file.read()
+    if len(content) > 200 * 1024 * 1024:
+        raise HTTPException(413, "File too large (>200MB)")
+    p = sfs._safe(w.id, target_rel)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
+    extracted = 0
+    if auto_extract and sfs.is_archive(file.filename):
+        try:
+            extracted = sfs.extract_archive(w.id, target_rel)
+            p.unlink()
+        except HTTPException:
+            raise
+    return {"ok": True, "path": target_rel, "size": len(content), "extracted": extracted}
+
+
+@app.post("/api/websites/{wid}/files/extract")
+def site_extract(wid: int, body: PathIn, db: Session = Depends(get_db),
+                 _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    count = sfs.extract_archive(w.id, body.path)
+    return {"ok": True, "extracted": count}
+
+
+@app.post("/api/websites/{wid}/toggle")
+def toggle_website(wid: int, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    w.is_active = not bool(w.is_active)
+    db.commit()
+    _apply_website(w)
+    return _website_dto(w)
+
+
+@app.post("/api/websites/{wid}/ssl")
+def website_issue_ssl(wid: int, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
+                   __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    ok, msg = nm.issue_ssl(w.domain)
+    if not ok:
+        raise HTTPException(400, msg)
+    w.ssl_enabled = True
+    db.commit()
+    _apply_website(w)
+    return {"ok": True, "message": msg}
+
+
+@app.get("/api/nginx/status")
+def nginx_status(_: User = Depends(auth.require_admin),
+                 __=Depends(_require_flag("experimental_websites"))):
+    return nm.nginx_status()
+
+
+@app.post("/api/nginx/reload")
+def nginx_reload(_: User = Depends(auth.require_admin),
+                 __=Depends(_require_flag("experimental_websites"))):
+    ok, msg = nm.reload_nginx()
+    if not ok:
+        raise HTTPException(400, msg)
+    return {"ok": True, "message": msg}
 
 
 if __name__ == "__main__":

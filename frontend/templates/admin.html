@@ -11,6 +11,7 @@
     <div class="logo">⚡ Panel</div>
     <nav>
       <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/websites">🌐 Сайты &amp; Nginx</a>
       <a href="/admin">⚙️ Администрирование</a>
       <a href="/profile">👤 Профиль</a>
     </nav>
@@ -52,6 +53,14 @@
         <button class="btn btn-primary" onclick="openEgg()">+ Новый шаблон</button>
       </div>
       <table id="eggs"><thead><tr><th>ID</th><th>Название</th><th>Язык</th><th>Docker-образ</th><th>Команда по умолчанию</th><th style="width:80px"></th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:4px">🧪 Экспериментальные функции</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:14px">
+        Бета-разделы панели. Включаются на свой страх и риск — могут содержать ошибки и менять поведение системы.
+      </div>
+      <div id="flags" class="muted">загрузка…</div>
     </div>
   </main>
 </div>
@@ -223,7 +232,43 @@ function openEgg() {
 }
 function closeModal() { document.getElementById("modal").innerHTML = ""; }
 
-loadSys(); loadUsers(); loadEggs();
+const FLAG_LABELS = {
+  experimental_websites: {
+    title: "🌐 Сайты и Nginx",
+    desc: "Размещение статических сайтов и reverse-proxy через nginx с управлением доменами и SSL.",
+  },
+};
+
+async function loadFlags() {
+  try {
+    const flags = await api.get("/api/settings");
+    const box = document.getElementById("flags");
+    box.innerHTML = Object.keys(FLAG_LABELS).map(k => {
+      const meta = FLAG_LABELS[k];
+      const on = !!flags[k];
+      return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px">
+        <div>
+          <div style="font-weight:600">${meta.title}</div>
+          <div class="muted" style="font-size:12px;margin-top:2px">${meta.desc}</div>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap">
+          <input type="checkbox" ${on?'checked':''} onchange="toggleFlag('${k}', this.checked)">
+          <span style="font-size:13px">${on?'включено':'выключено'}</span>
+        </label>
+      </div>`;
+    }).join("");
+  } catch (e) { document.getElementById("flags").textContent = "Ошибка загрузки"; }
+}
+
+async function toggleFlag(key, value) {
+  try {
+    await api.post("/api/settings", { key, value });
+    toast(value ? "Включено — обновите страницу" : "Выключено", "success");
+    loadFlags();
+  } catch (e) { toast(e.message, "error"); loadFlags(); }
+}
+
+loadSys(); loadUsers(); loadEggs(); loadFlags();
 </script>
 </body>
 </html>
