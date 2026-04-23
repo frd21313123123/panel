@@ -75,6 +75,7 @@ const api = {
   },
   get(p) { return this.req(p); },
   post(p, body) { return this.req(p, { method: "POST", body: JSON.stringify(body || {}) }); },
+  patch(p, body) { return this.req(p, { method: "PATCH", body: JSON.stringify(body || {}) }); },
   del(p) { return this.req(p, { method: "DELETE" }); },
 };
 
@@ -104,6 +105,13 @@ async function loadSidebar(active) {
       const a = document.querySelector('.sidebar a[href="/admin"]');
       if (a) a.style.display = "none";
     }
+    try {
+      const flags = await api.get("/api/settings/public");
+      if (!flags.experimental_websites) {
+        const a = document.querySelector('.sidebar a[href="/websites"]');
+        if (a) a.style.display = "none";
+      }
+    } catch (e) {}
     document.querySelectorAll(".sidebar nav a").forEach(a => {
       if (a.getAttribute("href") === active) a.classList.add("active");
     });

@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Сайты и Nginx</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/websites">🌐 Сайты &amp; Nginx</a>
+      <a href="/admin">⚙️ Администрирование</a>
+      <a href="/profile">👤 Профиль</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>Сайты и Nginx</h1>
+        <div class="muted" style="font-size:13px;margin-top:4px">
+          Загружайте статические сайты прямо в панель или проксируйте запросы в свои контейнеры.
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-secondary" onclick="reloadNginx()">↻ Reload nginx</button>
+        <button class="btn btn-primary" onclick="openCreate()">+ Добавить сайт</button>
+      </div>
+    </div>
+
+    <div id="status" class="card" style="padding:12px 16px;margin-bottom:14px;font-size:13px"></div>
+    <div id="list"></div>
+  </main>
+</div>
+
+<div id="modal"></div>
+<script src="/static/js/app.js"></script>
+<script>
+loadSidebar("/websites");
+
+function esc(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function loadStatus() {
+  const s = document.getElementById("status");
+  try {
+    const r = await api.get("/api/nginx/status");
+    const dot = c => `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px"></span>`;
+    s.innerHTML =
+      `${dot(r.running ? '#22c55e' : '#ef4444')} <b>nginx:</b> ${r.running ? 'работает' : 'остановлен'} ` +
+      ` &nbsp;·&nbsp; ${dot(r.config_ok ? '#22c55e' : '#ef4444')} <b>config:</b> ${r.config_ok ? 'OK' : 'ошибка'}` +
+      (r.config_test_output ? `<pre style="margin:8px 0 0;font-size:11px;white-space:pre-wrap">${esc(r.config_test_output)}</pre>` : '');
+  } catch (e) { s.innerHTML = `<span class="muted">статус nginx недоступен</span>`; }
+}
+
+async function reloadNginx() {
+  try { await api.post("/api/nginx/reload"); toast("nginx перезагружен", "success"); loadStatus(); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function load() {
+  const list = document.getElementById("list");
+  list.innerHTML = '<div class="muted">Загрузка…</div>';
+  try {
+    const sites = await api.get("/api/websites");
+    if (!sites.length) {
+      list.innerHTML = `<div class="card" style="text-align:center;padding:40px">
+        <div style="font-size:42px;margin-bottom:8px">🌐</div>
+        <h3>Сайтов пока нет</h3>
+        <div class="muted" style="margin-bottom:16px">Загрузите статический сайт или проксируйте свой контейнер</div>
+        <button class="btn btn-primary" onclick="openCreate()">+ Добавить сайт</button>
+      </div>`;
+      return;
+    }
+    list.innerHTML = `<div class="grid">${sites.map(w => {
+      const allDomains = [w.domain].concat(w.domains || []);
+      const port = w.listen_port && w.listen_port !== 80 ? `:${w.listen_port}` : '';
+      const proto = w.ssl_enabled ? 'https' : 'http';
+      const isStatic = w.mode === 'static';
+      return `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+          <h3 style="word-break:break-word">${esc(w.name)}</h3>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+            <span class="pill" style="background:${isStatic?'#1e40af':'#7c3aed'};color:#fff">${isStatic?'static':'proxy'}</span>
+            <span class="pill ${w.is_active ? 'running' : 'offline'}">${w.is_active ? 'активен' : 'выключен'}</span>
+          </div>
+        </div>
+        <div style="font-size:13px;margin-bottom:6px;display:flex;flex-direction:column;gap:2px">
+          ${allDomains.map(d => `<a href="${proto}://${esc(d)}${port}" target="_blank" style="color:var(--accent);text-decoration:none">${w.ssl_enabled ? '🔒' : '🌐'} ${esc(d)}${port}</a>`).join('')}
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:12px">
+          ${isStatic ? `📁 статические файлы (порт ${w.listen_port||80})` : `→ <code>${esc(w.proxy_pass)}</code>`}
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${isStatic ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openFiles(${w.id})">📁 Файлы</button>` : ''}
+          <button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openEdit(${w.id})">✎ Изменить</button>
+          <button class="btn btn-secondary" style="min-width:80px" onclick="toggle(${w.id})">${w.is_active ? '⏸' : '▶'}</button>
+          ${!w.ssl_enabled ? `<button class="btn btn-secondary" style="min-width:80px" onclick="ssl(${w.id})">🔒 SSL</button>` : ''}
+          <button class="btn btn-danger" style="min-width:60px" onclick="del(${w.id})">🗑</button>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  } catch (e) { toast(e.message, "error"); list.innerHTML = `<div class="card muted">Ошибка</div>`; }
+}
+
+function formHtml(w) {
+  w = w || {};
+  const mode = w.mode || 'proxy';
+  const domains = (w.domains || []).join(', ');
+  return `
+    <form id="siteForm">
+      <div class="form-group">
+        <label>Название</label>
+        <input name="name" required value="${esc(w.name||'')}" placeholder="Мой сайт">
+      </div>
+      <div class="form-group">
+        <label>Тип</label>
+        <select name="mode" id="modeSelect">
+          <option value="proxy" ${mode==='proxy'?'selected':''}>Reverse-proxy → ваше приложение</option>
+          <option value="static" ${mode==='static'?'selected':''}>Статический сайт (загрузка файлов в панель)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Основной домен</label>
+        <input name="domain" required value="${esc(w.domain||'')}" placeholder="example.com">
+        <div class="muted" style="font-size:11px;margin-top:4px">Используется как имя SSL-сертификата</div>
+      </div>
+      <div class="form-group">
+        <label>Дополнительные домены (через запятую/пробел)</label>
+        <input name="domains" value="${esc(domains)}" placeholder="www.example.com, example.org">
+        <div class="muted" style="font-size:11px;margin-top:4px">Все указанные домены попадут в server_name</div>
+      </div>
+      <div class="form-group">
+        <label>Порт прослушивания</label>
+        <input name="listen_port" type="number" value="${w.listen_port||80}" min="1" max="65535">
+        <div class="muted" style="font-size:11px;margin-top:4px">80 — стандартный HTTP. 443 для SSL добавится автоматически.</div>
+      </div>
+      <div class="form-group" id="proxyGroup">
+        <label>proxy_pass (только для proxy режима)</label>
+        <input name="proxy_pass" value="${esc(w.proxy_pass||'http://127.0.0.1:')}" placeholder="http://127.0.0.1:3000">
+      </div>
+      <div class="form-group">
+        <label>Дополнительные директивы nginx (опционально)</label>
+        <textarea name="nginx_extra" rows="3" style="font-family:monospace;font-size:12px" placeholder="client_max_body_size 50m;">${esc(w.nginx_extra||'')}</textarea>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">
+        <input type="checkbox" name="is_active" ${(w.is_active!==false)?'checked':''}>
+        <span>Активен</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px">
+        <input type="checkbox" name="ssl_enabled" ${w.ssl_enabled?'checked':''}>
+        <span>SSL уже выпущен (использовать /etc/letsencrypt cert)</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeModal()">Отмена</button>
+        <button class="btn btn-primary">Сохранить</button>
+      </div>
+    </form>`;
+}
+
+function bindForm(onSubmit) {
+  const sel = document.getElementById('modeSelect');
+  const proxy = document.getElementById('proxyGroup');
+  const sync = () => { proxy.style.display = sel.value === 'static' ? 'none' : ''; };
+  sel.addEventListener('change', sync); sync();
+  document.getElementById("siteForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = {
+      name: fd.get("name"),
+      domain: fd.get("domain"),
+      domains: (fd.get("domains")||"").split(/[,\s]+/).filter(Boolean),
+      mode: fd.get("mode"),
+      listen_port: parseInt(fd.get("listen_port")) || 80,
+      proxy_pass: fd.get("mode") === 'proxy' ? fd.get("proxy_pass") : "",
+      nginx_extra: fd.get("nginx_extra") || "",
+      is_active: fd.get("is_active") === "on",
+      ssl_enabled: fd.get("ssl_enabled") === "on",
+    };
+    try { await onSubmit(payload); closeModal(); load(); loadStatus(); }
+    catch (err) { toast(err.message, "error"); }
+  });
+}
+
+function openCreate() {
+  document.getElementById("modal").innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this)closeModal()">
+      <div class="modal" style="max-width:580px">
+        <h2>Новый сайт</h2>
+        ${formHtml({})}
+      </div>
+    </div>`;
+  bindForm(async p => { await api.post("/api/websites", p); toast("Сайт создан", "success"); });
+}
+
+async function openEdit(id) {
+  const w = await api.get(`/api/websites/${id}`);
+  document.getElementById("modal").innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this)closeModal()">
+      <div class="modal" style="max-width:580px">
+        <h2>Изменить сайт</h2>
+        ${formHtml(w)}
+      </div>
+    </div>`;
+  bindForm(async p => { await api.patch(`/api/websites/${id}`, p); toast("Сохранено", "success"); });
+}
+
+async function openFiles(id, path = "") {
+  const w = await api.get(`/api/websites/${id}`);
+  const data = await api.get(`/api/websites/${id}/files?path=${encodeURIComponent(path)}`);
+  const up = path ? path.split('/').slice(0, -1).join('/') : null;
+  document.getElementById("modal").innerHTML = `
+    <div class="modal-bg" onclick="if(event.target===this)closeModal()">
+      <div class="modal" style="max-width:720px">
+        <h2>📁 ${esc(w.name)} — файлы</h2>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">
+          Webroot: <code>${esc(w.webroot)}</code> · текущая папка: <code>/${esc(path)}</code>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <label class="btn btn-primary" style="cursor:pointer;margin:0">
+            ⬆ Загрузить файл/архив
+            <input type="file" id="fUp" style="display:none">
+          </label>
+          <button class="btn btn-secondary" onclick="siteMkdir(${id}, '${esc(path)}')">+ Папка</button>
+          ${up !== null ? `<button class="btn btn-secondary" onclick="openFiles(${id}, '${esc(up)}')">↑ Вверх</button>` : ''}
+          <div style="flex:1"></div>
+          <button class="btn btn-secondary" onclick="closeModal()">Закрыть</button>
+        </div>
+        <div id="fileList" style="max-height:50vh;overflow:auto;border:1px solid var(--border);border-radius:6px">
+          ${(data.items||[]).length ? data.items.map(it => {
+            const child = path ? `${path}/${it.name}` : it.name;
+            return `<div style="display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);gap:8px">
+              <span style="flex:1;cursor:${it.is_dir?'pointer':'default'}" ${it.is_dir?`onclick="openFiles(${id}, '${esc(child)}')"`:''}>
+                ${it.is_dir ? '📁' : '📄'} ${esc(it.name)}
+              </span>
+              <span class="muted" style="font-size:11px">${it.is_dir ? '' : fmtBytes(it.size)}</span>
+              ${!it.is_dir && /\\.(zip|tar|tgz|tar\\.gz)$/i.test(it.name) ? `<button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="siteExtract(${id}, '${esc(child)}', '${esc(path)}')">📦 Распаковать</button>` : ''}
+              <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="siteDel(${id}, '${esc(child)}', '${esc(path)}')">🗑</button>
+            </div>`;
+          }).join('') : '<div class="muted" style="padding:20px;text-align:center">Папка пуста — загрузите файлы или index.html</div>'}
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("fUp").addEventListener("change", async ev => {
+    const f = ev.target.files[0]; if (!f) return;
+    const fd = new FormData(); fd.append("file", f);
+    toast(`Загрузка ${f.name}…`);
+    try {
+      const res = await fetch(`/api/websites/${id}/files/upload?path=${encodeURIComponent(path)}&auto_extract=true`, {
+        method: "POST", body: fd, credentials: "include",
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.detail || "Ошибка загрузки");
+      toast(j.extracted ? `Распаковано ${j.extracted} файлов` : `Загружено ${f.name}`, "success");
+      openFiles(id, path);
+    } catch (e) { toast(e.message, "error"); }
+  });
+}
+
+async function siteMkdir(id, path) {
+  const name = prompt("Имя новой папки:"); if (!name) return;
+  const full = path ? `${path}/${name}` : name;
+  try { await api.post(`/api/websites/${id}/files/mkdir`, { path: full }); openFiles(id, path); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function siteDel(id, full, parent) {
+  if (!confirm(`Удалить ${full}?`)) return;
+  try { await api.post(`/api/websites/${id}/files/delete`, { path: full }); openFiles(id, parent); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function siteExtract(id, full, parent) {
+  try { const r = await api.post(`/api/websites/${id}/files/extract`, { path: full }); toast(`Распаковано ${r.extracted} файлов`, "success"); openFiles(id, parent); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function toggle(id) {
+  try { await api.post(`/api/websites/${id}/toggle`); load(); loadStatus(); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function del(id) {
+  if (!confirm("Удалить сайт, конфиг nginx и все его файлы?")) return;
+  try { await api.del(`/api/websites/${id}`); toast("Удалено", "success"); load(); loadStatus(); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+async function ssl(id) {
+  if (!confirm("Запустить certbot для SSL? Домен должен резолвиться на этот сервер.")) return;
+  toast("Выпуск сертификата…", "info");
+  try { await api.post(`/api/websites/${id}/ssl`); toast("SSL выпущен", "success"); load(); loadStatus(); }
+  catch (e) { toast(e.message, "error"); }
+}
+
+function closeModal() { document.getElementById("modal").innerHTML = ""; }
+
+loadStatus();
+load();
+</script>
+</body>
+</html>

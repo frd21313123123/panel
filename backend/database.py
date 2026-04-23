@@ -93,9 +93,31 @@ class Backup(Base):
     server = relationship("Server", back_populates="backups")
 
 
+class Website(Base):
+    __tablename__ = "websites"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False)
+    domain = Column(String(255), nullable=False)  # primary domain (legacy)
+    domains = Column(Text, default="")  # comma-separated additional domains
+    mode = Column(String(16), default="proxy")  # "proxy" | "static"
+    listen_port = Column(Integer, default=80)
+    proxy_pass = Column(String(512), default="")  # e.g. http://127.0.0.1:3000
+    nginx_extra = Column(Text, default="")
+    ssl_enabled = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, default="")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     _migrate_server_table()
+    _migrate_website_table()
     db = SessionLocal()
     try:
         if db.query(Egg).count() == 0:
@@ -115,6 +137,22 @@ def init_db():
             db.commit()
     finally:
         db.close()
+
+
+def _migrate_website_table():
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as conn:
+        tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "websites" not in tables:
+            return
+        cols = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(websites)").fetchall()}
+        if "domains" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN domains TEXT DEFAULT ''")
+        if "mode" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN mode VARCHAR(16) DEFAULT 'proxy'")
+        if "listen_port" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN listen_port INTEGER DEFAULT 80")
 
 
 def _migrate_server_table():
