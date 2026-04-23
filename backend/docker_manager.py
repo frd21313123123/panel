@@ -186,14 +186,39 @@ def status(server_id: int) -> str:
     return c.status
 
 
+def _uptime_seconds(c) -> int:
+    try:
+        started = (c.attrs.get("State") or {}).get("StartedAt")
+        if not started or started.startswith("0001"):
+            return 0
+        # формат: 2024-01-02T03:04:05.123456789Z — обрезаем нс до мкс
+        s = started.replace("Z", "+00:00")
+        if "." in s:
+            head, tail = s.split(".", 1)
+            tz = ""
+            if "+" in tail:
+                tail, tz = tail.split("+", 1); tz = "+" + tz
+            elif "-" in tail:
+                tail, tz = tail.split("-", 1); tz = "-" + tz
+            tail = tail[:6]
+            s = f"{head}.{tail}{tz}"
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(s)
+        return max(0, int((datetime.now(timezone.utc) - dt).total_seconds()))
+    except Exception:
+        return 0
+
+
 def stats(server_id: int) -> dict:
     c = inspect(server_id)
     disk = disk_usage(server_id)
     base = {"cpu": 0, "mem": 0, "mem_limit": 0, "disk": disk,
-            "net_rx": 0, "net_tx": 0, "status": "offline"}
+            "net_rx": 0, "net_tx": 0, "status": "offline", "uptime": 0}
     if not c:
         return base
     try:
+        c.reload()
+        uptime = _uptime_seconds(c) if c.status == "running" else 0
         s = c.stats(stream=False)
         cpu_delta = s["cpu_stats"]["cpu_usage"]["total_usage"] - s["precpu_stats"]["cpu_usage"]["total_usage"]
         sys_delta = s["cpu_stats"].get("system_cpu_usage", 0) - s["precpu_stats"].get("system_cpu_usage", 0)
@@ -209,9 +234,11 @@ def stats(server_id: int) -> dict:
             net_rx += iface.get("rx_bytes", 0)
             net_tx += iface.get("tx_bytes", 0)
         return {"cpu": round(cpu_pct, 2), "mem": mem, "mem_limit": mem_limit,
-                "disk": disk, "net_rx": net_rx, "net_tx": net_tx, "status": c.status}
+                "disk": disk, "net_rx": net_rx, "net_tx": net_tx,
+                "status": c.status, "uptime": uptime}
     except Exception:
         base["status"] = c.status
+        base["uptime"] = _uptime_seconds(c) if c.status == "running" else 0
         return base
 
 
