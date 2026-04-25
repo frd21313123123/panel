@@ -105,6 +105,15 @@ class Website(Base):
     nginx_extra = Column(Text, default="")
     ssl_enabled = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    git_repo = Column(String(512), default="")
+    git_branch = Column(String(128), default="")
+    web_subdir = Column(String(255), default="")  # subfolder inside webroot used as nginx root
+    runtime_enabled = Column(Boolean, default=False)
+    runtime_cwd = Column(String(255), default="")  # subdir to run cmds from
+    runtime_install_cmd = Column(Text, default="")  # e.g. "npm install --omit=dev"
+    runtime_start_cmd = Column(Text, default="")  # e.g. "node backend/server.js"
+    runtime_port = Column(Integer, default=0)  # internal port the app listens on
+    runtime_env = Column(Text, default="")  # KEY=val per line, also written to .env
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -153,6 +162,24 @@ def _migrate_website_table():
             conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN mode VARCHAR(16) DEFAULT 'proxy'")
         if "listen_port" not in cols:
             conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN listen_port INTEGER DEFAULT 80")
+        if "git_repo" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN git_repo VARCHAR(512) DEFAULT ''")
+        if "git_branch" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN git_branch VARCHAR(128) DEFAULT ''")
+        if "web_subdir" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN web_subdir VARCHAR(255) DEFAULT ''")
+        if "runtime_enabled" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_enabled BOOLEAN DEFAULT 0")
+        if "runtime_cwd" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_cwd VARCHAR(255) DEFAULT ''")
+        if "runtime_install_cmd" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_install_cmd TEXT DEFAULT ''")
+        if "runtime_start_cmd" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_start_cmd TEXT DEFAULT ''")
+        if "runtime_port" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_port INTEGER DEFAULT 0")
+        if "runtime_env" not in cols:
+            conn.exec_driver_sql("ALTER TABLE websites ADD COLUMN runtime_env TEXT DEFAULT ''")
 
 
 def _migrate_server_table():

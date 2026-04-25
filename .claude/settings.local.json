@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__SSH_Server__ssh_connect",
+      "mcp__SSH_Server__ssh_execute",
+      "mcp__SSH_Server__ssh_upload_file",
+      "mcp__SSH_Server__ssh_disconnect",
+      "Bash(gh pr create --title 'Add experimental websites & nginx management' --body ' *)"
+    ]
+  }
+}

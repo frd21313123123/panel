@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Сайт</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/websites">🌐 Сайты &amp; Nginx</a>
+      <a href="/admin">⚙️ Администрирование</a>
+      <a href="/profile">👤 Профиль</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <a href="/websites" class="muted" style="font-size:12px;text-decoration:none">← Все сайты</a>
+        <h1 id="siteName" style="margin-top:2px">Сайт</h1>
+        <div class="muted" id="siteDomain" style="font-size:13px;margin-top:4px"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <span id="rtPill" class="pill offline">runtime: —</span>
+        <span id="actPill" class="pill offline">nginx: —</span>
+      </div>
+    </div>
+
+    <div class="detail-hero">
+      <div class="card">
+        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Website endpoint</div>
+        <div class="detail-title">
+          <span class="logo-mark" aria-hidden="true">
+            <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>
+          </span>
+          <div>
+            <h2 id="heroSiteName" style="font-size:24px;line-height:1.1">Сайт</h2>
+            <div id="heroSiteUrl" class="muted" style="font-size:13px;margin-top:4px"></div>
+          </div>
+        </div>
+        <div class="mini-metrics">
+          <div class="mini-metric"><span>Mode</span><strong id="metricMode">—</strong></div>
+          <div class="mini-metric"><span>Runtime</span><strong id="metricRuntime">—</strong></div>
+          <div class="mini-metric"><span>SSL</span><strong id="metricSsl">—</strong></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px">Quick status</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px">
+          <span id="heroRtPill" class="pill offline">runtime: —</span>
+          <span id="heroActPill" class="pill offline">nginx: —</span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-bottom:10px">Nginx configuration, runtime logs, SSL state and webroot files are grouped below.</div>
+        <button class="btn btn-secondary" onclick="reloadNginx()" style="width:100%">Reload nginx</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px">Управление приложением</div>
+      <div class="power-row" style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-success" onclick="rt('start')">▶ Запустить</button>
+        <button class="btn btn-warn" onclick="rt('restart')">↻ Перезапуск</button>
+        <button class="btn btn-secondary" onclick="rt('stop')">■ Стоп</button>
+        <button class="btn btn-secondary" onclick="rt('install')" title="Запустить команду установки (npm install и т.п.)">📦 Install</button>
+        <button class="btn btn-secondary" onclick="gitSync()" id="btnGit" style="display:none">⬇ Git pull</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-secondary" onclick="reloadNginx()">↻ Reload nginx</button>
+        <button class="btn btn-danger" onclick="del()">🗑 Удалить сайт</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="nginx">Nginx Config</div>
+      <div class="tab" data-tab="logs">📜 Логи</div>
+      <div class="tab" data-tab="files">📁 Файлы</div>
+      <div class="tab" data-tab="ssl">SSL</div>
+      <div class="tab" data-tab="settings">⚙️ Настройки</div>
+      <div class="tab" data-tab="env">🔐 Переменные</div>
+    </div>
+
+    <div id="tab-nginx">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em">Generated nginx config preview</div>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary" onclick="copyNginxConfig()">Copy</button>
+          <button class="btn btn-primary" onclick="reloadNginx()">Reload nginx</button>
+        </div>
+        <pre id="nginxPreview" style="min-height:420px;overflow:auto;padding:14px;white-space:pre-wrap;margin:0"></pre>
+      </div>
+    </div>
+
+    <div id="tab-logs" style="display:none">
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em">Логи приложения · live</div>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary" onclick="clearLogs()">Очистить экран</button>
+        </div>
+        <pre id="logBox" style="height:520px;overflow:auto;background:#000;color:#cde;padding:10px;border-radius:6px;font-family:monospace;font-size:12px;white-space:pre-wrap;margin:0"></pre>
+      </div>
+    </div>
+
+    <div id="tab-files" style="display:none">
+      <div class="card">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:10px">Файлы webroot</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">Webroot: <code id="wr"></code></div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <label class="btn btn-primary" style="cursor:pointer;margin:0">⬆ Загрузить
+            <input type="file" id="fUp" style="display:none">
+          </label>
+          <button class="btn btn-secondary" onclick="mkdir()">+ Папка</button>
+          <button class="btn btn-secondary" onclick="upDir()">↑ Вверх</button>
+          <span class="muted" style="font-size:11px;align-self:center">Текущая: /<span id="curPath"></span></span>
+        </div>
+        <div id="fileList" style="border:1px solid var(--border);border-radius:6px;max-height:520px;overflow:auto"></div>
+      </div>
+    </div>
+
+    <div id="tab-ssl" style="display:none">
+      <div class="card">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px">SSL certificate status</div>
+            <h3 id="sslTitle" style="margin-bottom:6px">—</h3>
+            <div id="sslInfo" class="muted" style="font-size:13px"></div>
+          </div>
+          <button class="btn btn-primary" onclick="ssl()">Выпустить / обновить SSL</button>
+        </div>
+        <hr>
+        <div class="stat-grid">
+          <div class="stat"><div class="label">Primary domain</div><div class="value" id="sslDomain" style="font-size:15px">—</div></div>
+          <div class="stat"><div class="label">Listen port</div><div class="value" id="sslPort" style="font-size:15px">—</div></div>
+          <div class="stat"><div class="label">Nginx active</div><div class="value" id="sslNginx" style="font-size:15px">—</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-settings" style="display:none">
+      <div class="card">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:10px">Параметры сайта и runtime</div>
+        <form id="settingsForm">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="form-group">
+              <label>Название</label>
+              <input name="name" required>
+            </div>
+            <div class="form-group">
+              <label>Тип</label>
+              <select name="mode" id="modeSel">
+                <option value="proxy">Reverse-proxy</option>
+                <option value="static">Статический</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Основной домен</label>
+              <input name="domain" required>
+            </div>
+            <div class="form-group">
+              <label>Доп. домены (через запятую)</label>
+              <input name="domains">
+            </div>
+            <div class="form-group">
+              <label>Порт прослушивания (HTTP)</label>
+              <input name="listen_port" type="number" min="1" max="65535">
+            </div>
+            <div class="form-group" id="proxyGrp">
+              <label>proxy_pass</label>
+              <input name="proxy_pass" placeholder="http://127.0.0.1:3010">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>nginx_extra</label>
+            <textarea name="nginx_extra" rows="2" style="font-family:monospace;font-size:12px"></textarea>
+          </div>
+
+          <hr style="margin:18px 0;border:none;border-top:1px solid var(--border)">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px">GitHub репозиторий</div>
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px">
+            <div class="form-group">
+              <label>URL</label>
+              <input name="git_repo" placeholder="https://github.com/user/repo.git">
+            </div>
+            <div class="form-group">
+              <label>Ветка</label>
+              <input name="git_branch" placeholder="main">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Папка с сайтом внутри репо (для static)</label>
+            <input name="web_subdir" placeholder="dist  или  backend/public">
+          </div>
+
+          <hr style="margin:18px 0;border:none;border-top:1px solid var(--border)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:10px">
+            <input type="checkbox" name="runtime_enabled">
+            <span>Запускать приложение автоматически при старте панели</span>
+          </label>
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px">
+            <div class="form-group">
+              <label>Папка для команд (cwd)</label>
+              <input name="runtime_cwd" placeholder="(корень репо)">
+            </div>
+            <div class="form-group">
+              <label>Внутренний порт приложения</label>
+              <input name="runtime_port" type="number" min="0" max="65535" placeholder="3010">
+              <div class="muted" style="font-size:11px;margin-top:4px">Передаётся как PORT в окружение.</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Команда установки</label>
+            <input name="runtime_install_cmd" placeholder="npm install --omit=dev">
+          </div>
+          <div class="form-group">
+            <label>Команда запуска</label>
+            <input name="runtime_start_cmd" placeholder="node backend/server.js">
+          </div>
+
+          <div style="display:flex;gap:10px;align-items:center;margin-top:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+              <input type="checkbox" name="is_active"><span>Сайт активен (nginx)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+              <input type="checkbox" name="ssl_enabled"><span>SSL</span>
+            </label>
+            <span style="flex:1"></span>
+            <button type="button" class="btn btn-secondary" onclick="ssl()">🔒 Выпустить SSL</button>
+            <button class="btn btn-primary">Сохранить</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="tab-env" style="display:none">
+      <div class="card">
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px">Переменные окружения (.env)</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px">По одной паре <code>KEY=value</code> в строке. Сохраняется в .env в папке cwd и передаётся в процесс.</div>
+        <textarea id="envBox" rows="20" style="width:100%;font-family:monospace;font-size:12px;background:#0b1220;color:#cde;border:1px solid var(--border);border-radius:6px;padding:10px"></textarea>
+        <div style="margin-top:10px;display:flex;justify-content:flex-end">
+          <button class="btn btn-primary" onclick="saveEnv()">Сохранить и записать .env</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/app.js"></script>
+<script>
+const SID = {{ site_id }};
+let site = null;
+let curPath = "";
+let logWs = null;
+
+loadSidebar("/websites");
+
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  ['nginx','logs','files','ssl','settings','env'].forEach(id => {
+    document.getElementById('tab-'+id).style.display = (id===t.dataset.tab?'':'none');
+  });
+  if (t.dataset.tab === 'files') loadFiles(curPath);
+}));
+
+function esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+function buildNginxConfig(w) {
+  const domains = [w.domain].concat(w.domains || []).filter(Boolean).join(" ");
+  const listen = w.listen_port || 80;
+  const isStatic = (w.mode || "proxy") === "static";
+  const ssl = w.ssl_enabled;
+  const target = isStatic
+    ? `root ${w.webroot || "/var/www/site"};\n    try_files $uri $uri/ /index.html;`
+    : `proxy_pass ${w.proxy_pass || "http://127.0.0.1:3000"};\n    proxy_http_version 1.1;\n    proxy_set_header Host $host;\n    proxy_set_header X-Real-IP $remote_addr;\n    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n    proxy_set_header X-Forwarded-Proto $scheme;`;
+  const sslBlock = ssl ? `
+    ssl_certificate /etc/letsencrypt/live/${w.domain}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${w.domain}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;` : "";
+  return `server {
+    listen ${listen}${ssl ? " ssl http2" : ""};
+    server_name ${domains || "_"};
+${sslBlock}
+
+    access_log /var/log/nginx/${w.domain || "site"}.access.log;
+    error_log /var/log/nginx/${w.domain || "site"}.error.log;
+
+    location / {
+    ${target}
+    }
+${w.nginx_extra ? `\n    # Extra directives\n    ${w.nginx_extra.replace(/\n/g, "\n    ")}` : ""}
+}`;
+}
+
+async function copyNginxConfig() {
+  try {
+    await navigator.clipboard.writeText(document.getElementById("nginxPreview").textContent || "");
+    toast("Nginx config copied", "success");
+  } catch (e) {
+    toast("Не удалось скопировать", "error");
+  }
+}
+
+async function load() {
+  try { site = await api.get(`/api/websites/${SID}`); }
+  catch (e) { toast(e.message,"error"); return; }
+  document.getElementById("siteName").textContent = site.name;
+  const port = site.listen_port && site.listen_port !== 80 ? `:${site.listen_port}` : '';
+  const proto = site.ssl_enabled ? 'https' : 'http';
+  document.getElementById("siteDomain").innerHTML = `<a href="${proto}://${esc(site.domain)}${port}" target="_blank" style="color:var(--accent)">${proto}://${esc(site.domain)}${port}</a>`;
+  document.getElementById("heroSiteName").textContent = site.name;
+  document.getElementById("heroSiteUrl").innerHTML = `<a href="${proto}://${esc(site.domain)}${port}" target="_blank">${proto}://${esc(site.domain)}${port}</a>`;
+  document.getElementById("metricMode").textContent = site.mode || "proxy";
+  document.getElementById("metricSsl").textContent = site.ssl_enabled ? "enabled" : "not issued";
+
+  const rt = site.runtime_status || {};
+  const rtP = document.getElementById("rtPill");
+  rtP.className = "pill " + (rt.running ? "running" : "offline");
+  rtP.textContent = "runtime: " + (rt.running ? `работает (PID ${rt.pid})` : (site.runtime_start_cmd ? "остановлен" : "не настроен"));
+  const heroRtP = document.getElementById("heroRtPill");
+  heroRtP.className = rtP.className;
+  heroRtP.textContent = rtP.textContent;
+  document.getElementById("metricRuntime").textContent = rt.running ? `PID ${rt.pid}` : (site.runtime_start_cmd ? "stopped" : "disabled");
+  const aP = document.getElementById("actPill");
+  aP.className = "pill " + (site.is_active ? "running" : "offline");
+  aP.textContent = "nginx: " + (site.is_active ? "активен" : "выкл.");
+  const heroActP = document.getElementById("heroActPill");
+  heroActP.className = aP.className;
+  heroActP.textContent = aP.textContent;
+  document.getElementById("nginxPreview").textContent = buildNginxConfig(site);
+  document.getElementById("sslTitle").textContent = site.ssl_enabled ? "SSL active" : "SSL is not enabled";
+  document.getElementById("sslInfo").textContent = site.ssl_enabled
+    ? "Nginx will use the Let’s Encrypt certificate for this domain."
+    : "Issue a certificate after DNS points to this server.";
+  document.getElementById("sslDomain").textContent = site.domain || "—";
+  document.getElementById("sslPort").textContent = site.listen_port || 80;
+  document.getElementById("sslNginx").textContent = site.is_active ? "active" : "disabled";
+
+  document.getElementById("btnGit").style.display = site.git_repo ? '' : 'none';
+  document.getElementById("wr").textContent = site.webroot || '—';
+
+  // settings form
+  const f = document.getElementById("settingsForm");
+  f.name.value = site.name;
+  f.domain.value = site.domain;
+  f.domains.value = (site.domains||[]).join(", ");
+  f.mode.value = site.mode;
+  f.listen_port.value = site.listen_port || 80;
+  f.proxy_pass.value = site.proxy_pass || "";
+  f.nginx_extra.value = site.nginx_extra || "";
+  f.git_repo.value = site.git_repo || "";
+  f.git_branch.value = site.git_branch || "";
+  f.web_subdir.value = site.web_subdir || "";
+  f.runtime_enabled.checked = !!site.runtime_enabled;
+  f.runtime_cwd.value = site.runtime_cwd || "";
+  f.runtime_port.value = site.runtime_port || "";
+  f.runtime_install_cmd.value = site.runtime_install_cmd || "";
+  f.runtime_start_cmd.value = site.runtime_start_cmd || "";
+  f.is_active.checked = !!site.is_active;
+  f.ssl_enabled.checked = !!site.ssl_enabled;
+  document.getElementById("proxyGrp").style.display = site.mode === 'static' ? 'none' : '';
+
+  document.getElementById("envBox").value = site.runtime_env || "";
+}
+
+document.getElementById("modeSel").addEventListener("change", e => {
+  document.getElementById("proxyGrp").style.display = e.target.value === 'static' ? 'none' : '';
+});
+
+document.getElementById("settingsForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = e.target;
+  const payload = {
+    name: f.name.value,
+    domain: f.domain.value,
+    domains: f.domains.value.split(/[,\s]+/).filter(Boolean),
+    mode: f.mode.value,
+    listen_port: parseInt(f.listen_port.value)||80,
+    proxy_pass: f.proxy_pass.value,
+    nginx_extra: f.nginx_extra.value,
+    git_repo: f.git_repo.value.trim(),
+    git_branch: f.git_branch.value.trim(),
+    web_subdir: f.web_subdir.value.trim(),
+    runtime_enabled: f.runtime_enabled.checked,
+    runtime_cwd: f.runtime_cwd.value.trim(),
+    runtime_port: parseInt(f.runtime_port.value)||0,
+    runtime_install_cmd: f.runtime_install_cmd.value,
+    runtime_start_cmd: f.runtime_start_cmd.value,
+    is_active: f.is_active.checked,
+    ssl_enabled: f.ssl_enabled.checked,
+  };
+  try { await api.patch(`/api/websites/${SID}`, payload); toast("Сохранено","success"); load(); }
+  catch (err) { toast(err.message,"error"); }
+});
+
+async function saveEnv() {
+  try {
+    await api.patch(`/api/websites/${SID}`, { runtime_env: document.getElementById("envBox").value });
+    toast(".env сохранён","success"); load();
+  } catch (e) { toast(e.message,"error"); }
+}
+
+async function rt(action) {
+  try {
+    const r = await api.post(`/api/websites/${SID}/runtime/${action}`, {});
+    toast(r.message || "OK","success"); load();
+  } catch (e) { toast(e.message,"error"); load(); }
+}
+
+async function gitSync() {
+  if (!confirm("Обновить файлы сайта из Git? Локальные изменения будут перезаписаны.")) return;
+  toast("git pull…","info");
+  try { await api.post(`/api/websites/${SID}/git/sync`, {}); toast("Обновлено из Git","success"); load(); }
+  catch (e) { toast(e.message,"error"); }
+}
+
+async function ssl() {
+  if (!confirm("Запустить certbot? Домен должен резолвиться на этот сервер.")) return;
+  toast("Выпуск сертификата…","info");
+  try { await api.post(`/api/websites/${SID}/ssl`, {}); toast("SSL выпущен","success"); load(); }
+  catch (e) { toast(e.message,"error"); }
+}
+
+async function reloadNginx() {
+  try { await api.post("/api/nginx/reload",{}); toast("nginx перезагружен","success"); }
+  catch (e) { toast(e.message,"error"); }
+}
+
+async function del() {
+  if (!confirm("Удалить сайт со всеми файлами и nginx-конфигом?")) return;
+  try { await api.del(`/api/websites/${SID}`); toast("Удалено","success"); location.href="/websites"; }
+  catch (e) { toast(e.message,"error"); }
+}
+
+// ---- logs ----
+function clearLogs(){ document.getElementById("logBox").textContent = ""; }
+function startLogs() {
+  if (logWs) { try{logWs.close()}catch(e){} }
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  logWs = new WebSocket(`${proto}//${location.host}/ws/websites/${SID}/logs`);
+  logWs.onmessage = ev => {
+    const box = document.getElementById("logBox");
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 30;
+    box.textContent += ev.data;
+    if (box.textContent.length > 400000) box.textContent = box.textContent.slice(-300000);
+    if (atBottom) box.scrollTop = box.scrollHeight;
+  };
+  logWs.onclose = () => { setTimeout(startLogs, 3000); };
+}
+
+// ---- files ----
+async function loadFiles(p) {
+  curPath = p || "";
+  document.getElementById("curPath").textContent = curPath;
+  try {
+    const r = await api.get(`/api/websites/${SID}/files?path=${encodeURIComponent(curPath)}`);
+    const fl = document.getElementById("fileList");
+    fl.innerHTML = (r.items||[]).length ? r.items.map(it => {
+      const child = curPath ? `${curPath}/${it.name}` : it.name;
+      return `<div style="display:flex;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);gap:8px">
+        <span style="flex:1;cursor:${it.is_dir?'pointer':'default'}" ${it.is_dir?`onclick="loadFiles('${esc(child)}')"`:''}>${it.is_dir?'📁':'📄'} ${esc(it.name)}</span>
+        <span class="muted" style="font-size:11px">${it.is_dir?'':fmtBytes(it.size)}</span>
+        ${!it.is_dir && /\.(zip|tar|tgz|tar\.gz)$/i.test(it.name) ? `<button class="btn btn-secondary" style="padding:2px 8px;font-size:11px" onclick="extract('${esc(child)}')">📦</button>` : ''}
+        <button class="btn btn-danger" style="padding:2px 8px;font-size:11px" onclick="delFile('${esc(child)}')">🗑</button>
+      </div>`;
+    }).join('') : '<div class="muted" style="padding:18px;text-align:center">Папка пуста</div>';
+  } catch (e) { toast(e.message,"error"); }
+}
+function upDir() { if (!curPath) return; loadFiles(curPath.split('/').slice(0,-1).join('/')); }
+async function mkdir() {
+  const n = prompt("Имя папки:"); if (!n) return;
+  const full = curPath ? `${curPath}/${n}` : n;
+  try { await api.post(`/api/websites/${SID}/files/mkdir`, {path: full}); loadFiles(curPath); }
+  catch (e) { toast(e.message,"error"); }
+}
+async function delFile(full) {
+  if (!confirm(`Удалить ${full}?`)) return;
+  try { await api.post(`/api/websites/${SID}/files/delete`, {path: full}); loadFiles(curPath); }
+  catch (e) { toast(e.message,"error"); }
+}
+async function extract(full) {
+  try { const r = await api.post(`/api/websites/${SID}/files/extract`, {path: full}); toast(`Распаковано ${r.extracted} файлов`,"success"); loadFiles(curPath); }
+  catch (e) { toast(e.message,"error"); }
+}
+document.getElementById("fUp").addEventListener("change", async ev => {
+  const f = ev.target.files[0]; if (!f) return;
+  const fd = new FormData(); fd.append("file", f);
+  toast(`Загрузка ${f.name}…`);
+  try {
+    const res = await fetch(`/api/websites/${SID}/files/upload?path=${encodeURIComponent(curPath)}&auto_extract=true`, {method:"POST", body:fd, credentials:"include"});
+    const j = await res.json();
+    if (!res.ok) throw new Error(j.detail||"Ошибка загрузки");
+    toast(j.extracted ? `Распаковано ${j.extracted} файлов` : `Загружено`,"success");
+    loadFiles(curPath);
+  } catch (e) { toast(e.message,"error"); }
+});
+
+load();
+startLogs();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

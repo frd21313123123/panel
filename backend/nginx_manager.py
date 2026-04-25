@@ -29,9 +29,13 @@ def generate_config(
     all_domains = [domain] + [d for d in (extra_domains or []) if d and d != domain]
     server_name = " ".join(all_domains)
 
-    listen_lines = [f"listen {listen_port};"]
+    listen_lines = []
     if ssl:
+        if listen_port and listen_port != 443:
+            listen_lines.append(f"listen {listen_port};")
         listen_lines.append("listen 443 ssl;")
+    else:
+        listen_lines.append(f"listen {listen_port};")
     listen_block = "\n    ".join(listen_lines)
 
     ssl_block = ""

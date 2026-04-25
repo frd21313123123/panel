@@ -21,6 +21,7 @@ import docker_manager as dm
 import nginx_manager as nm
 import files as fs
 import sites_files as sfs
+import site_runtime as srt
 import backups as bk
 import scheduler
 import tasks as tk
@@ -53,6 +54,17 @@ def startup():
         db.close()
     scheduler.start_background()
     print("[panel] scheduler started")
+    try:
+        srt.auto_start_all(SessionLocal)
+        print("[panel] site runtime auto-start complete")
+    except Exception as e:
+        print(f"[panel] site runtime auto-start error: {e}")
+
+
+@app.on_event("shutdown")
+def _shutdown_site_runtimes():
+    try: srt.stop_all()
+    except Exception: pass
 
 
 # ---------- Schemas ----------
@@ -148,6 +160,15 @@ class WebsiteIn(BaseModel):
     nginx_extra: str = ""
     ssl_enabled: bool = False
     is_active: bool = True
+    git_repo: str = ""
+    git_branch: str = ""
+    web_subdir: str = ""
+    runtime_enabled: bool = False
+    runtime_cwd: str = ""
+    runtime_install_cmd: str = ""
+    runtime_start_cmd: str = ""
+    runtime_port: int = 0
+    runtime_env: str = ""
 
 
 class WebsiteUpdate(BaseModel):
@@ -160,6 +181,15 @@ class WebsiteUpdate(BaseModel):
     nginx_extra: Optional[str] = None
     ssl_enabled: Optional[bool] = None
     is_active: Optional[bool] = None
+    git_repo: Optional[str] = None
+    git_branch: Optional[str] = None
+    web_subdir: Optional[str] = None
+    runtime_enabled: Optional[bool] = None
+    runtime_cwd: Optional[str] = None
+    runtime_install_cmd: Optional[str] = None
+    runtime_start_cmd: Optional[str] = None
+    runtime_port: Optional[int] = None
+    runtime_env: Optional[str] = None
 
 
 class RenameIn(BaseModel):
@@ -230,6 +260,13 @@ def websites_page(request: Request, db: Session = Depends(get_db)):
     if not _flag_enabled(db, "experimental_websites"):
         raise HTTPException(404, "Not found")
     return templates.TemplateResponse("websites.html", {"request": request})
+
+
+@app.get("/sites/{wid}", response_class=HTMLResponse)
+def site_page(request: Request, wid: int, db: Session = Depends(get_db)):
+    if not _flag_enabled(db, "experimental_websites"):
+        raise HTTPException(404, "Not found")
+    return templates.TemplateResponse("site.html", {"request": request, "site_id": wid})
 
 
 # ---------- Settings API ----------
@@ -1061,6 +1098,16 @@ def _website_dto(w: Website) -> dict:
         "listen_port": w.listen_port or 80,
         "proxy_pass": w.proxy_pass or "", "nginx_extra": w.nginx_extra or "",
         "ssl_enabled": bool(w.ssl_enabled), "is_active": bool(w.is_active),
+        "git_repo": w.git_repo or "",
+        "git_branch": w.git_branch or "",
+        "web_subdir": w.web_subdir or "",
+        "runtime_enabled": bool(getattr(w, "runtime_enabled", False)),
+        "runtime_cwd": getattr(w, "runtime_cwd", "") or "",
+        "runtime_install_cmd": getattr(w, "runtime_install_cmd", "") or "",
+        "runtime_start_cmd": getattr(w, "runtime_start_cmd", "") or "",
+        "runtime_port": getattr(w, "runtime_port", 0) or 0,
+        "runtime_env": getattr(w, "runtime_env", "") or "",
+        "runtime_status": srt.status(w.id),
         "webroot": str(sfs.site_dir(w.id)) if (w.mode or "proxy") == "static" else "",
         "created_at": w.created_at.isoformat() if w.created_at else None,
     }
@@ -1071,7 +1118,15 @@ def _apply_website(w: Website):
     try:
         webroot = ""
         if (w.mode or "proxy") == "static":
-            webroot = str(sfs.site_dir(w.id))
+            base = sfs.site_dir(w.id)
+            sub = (w.web_subdir or "").strip().strip("/\\")
+            if sub:
+                resolved = (base / sub).resolve()
+                if not str(resolved).startswith(str(base.resolve())):
+                    raise HTTPException(400, "web_subdir escapes webroot")
+                webroot = str(resolved)
+            else:
+                webroot = str(base)
         cfg = nm.generate_config(
             domain=w.domain,
             proxy_pass=w.proxy_pass or "",
@@ -1117,6 +1172,14 @@ def create_website(body: WebsiteIn, db: Session = Depends(get_db), _: User = Dep
     db.refresh(w)
     if w.mode == "static":
         sfs.site_dir(w.id)  # ensure webroot
+        if (w.git_repo or "").strip():
+            try:
+                _website_git_sync(w)
+            except HTTPException:
+                shutil.rmtree(sfs.site_dir(w.id), ignore_errors=True)
+                db.delete(w)
+                db.commit()
+                raise
     try:
         _apply_website(w)
     except HTTPException:
@@ -1270,6 +1333,174 @@ def website_issue_ssl(wid: int, db: Session = Depends(get_db), _: User = Depends
     db.commit()
     _apply_website(w)
     return {"ok": True, "message": msg}
+
+
+def _website_git_sync(w: Website) -> str:
+    """Clone (if empty) or pull (if already a git repo) into the site webroot.
+    Returns combined git output. Static-mode only."""
+    if (w.mode or "proxy") != "static":
+        raise HTTPException(400, "Git sync is only available for static sites")
+    repo = (w.git_repo or "").strip()
+    if not repo:
+        raise HTTPException(400, "Git repository is not configured for this site")
+
+    worktree = sfs.site_dir(w.id)
+    branch = (w.git_branch or "").strip()
+    messages = []
+
+    if (worktree / ".git").exists():
+        _, origin = _run_git(["config", "--get", "remote.origin.url"], worktree, check=False)
+        if origin and origin.strip() != repo:
+            _run_git(["remote", "set-url", "origin", repo], worktree)
+        if branch:
+            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
+            code, _ = _run_git(["checkout", branch], worktree, check=False)
+            if code != 0:
+                _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
+            messages.append(_run_git(["reset", "--hard", f"origin/{branch}"], worktree)[1])
+        else:
+            messages.append(_run_git(["pull", "--ff-only"], worktree)[1])
+    else:
+        # initial clone — webroot may have leftover files; require empty or wipe
+        existing = [p for p in worktree.iterdir()] if worktree.exists() else []
+        if existing:
+            for p in existing:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    try: p.unlink()
+                    except OSError: pass
+        clone_args = ["clone"]
+        if branch:
+            clone_args += ["--branch", branch, "--single-branch"]
+        clone_args += [repo, "."]
+        messages.append(_run_git(clone_args, worktree)[1])
+
+    return "\n".join(m for m in messages if m).strip()
+
+
+@app.get("/api/websites/{wid}/runtime/status")
+def site_runtime_status(wid: int, db: Session = Depends(get_db),
+                        _: User = Depends(auth.require_admin),
+                        __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    return srt.status(w.id)
+
+
+@app.post("/api/websites/{wid}/runtime/start")
+def site_runtime_start(wid: int, db: Session = Depends(get_db),
+                       _: User = Depends(auth.require_admin),
+                       __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    ok, msg = srt.start(w)
+    if not ok: raise HTTPException(400, msg)
+    return {"ok": True, "message": msg, "status": srt.status(w.id)}
+
+
+@app.post("/api/websites/{wid}/runtime/stop")
+def site_runtime_stop(wid: int, db: Session = Depends(get_db),
+                      _: User = Depends(auth.require_admin),
+                      __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    srt.stop(w.id)
+    return {"ok": True, "status": srt.status(w.id)}
+
+
+@app.post("/api/websites/{wid}/runtime/restart")
+def site_runtime_restart(wid: int, db: Session = Depends(get_db),
+                         _: User = Depends(auth.require_admin),
+                         __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    ok, msg = srt.restart(w)
+    if not ok: raise HTTPException(400, msg)
+    return {"ok": True, "message": msg, "status": srt.status(w.id)}
+
+
+@app.post("/api/websites/{wid}/runtime/install")
+def site_runtime_install(wid: int, db: Session = Depends(get_db),
+                         _: User = Depends(auth.require_admin),
+                         __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    ok, msg = srt.run_install(w)
+    if not ok: raise HTTPException(400, msg)
+    return {"ok": True, "message": msg}
+
+
+@app.get("/api/websites/{wid}/runtime/logs")
+def site_runtime_logs(wid: int, db: Session = Depends(get_db),
+                      _: User = Depends(auth.require_admin),
+                      __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w: raise HTTPException(404, "Not found")
+    return {"text": srt.tail(w.id)}
+
+
+@app.websocket("/ws/websites/{wid}/logs")
+async def site_runtime_logs_ws(websocket: WebSocket, wid: int):
+    # auth via cookie or token
+    token = websocket.query_params.get("token") or websocket.cookies.get("panel_token")
+    payload = auth.decode_token(token) if token else None
+    if not payload:
+        await websocket.close(code=4401); return
+    db = SessionLocal()
+    try:
+        uid = payload.get("sub") or payload.get("uid")
+        u = db.query(User).get(int(uid)) if uid else None
+        if not u or not u.is_admin:
+            await websocket.close(code=4403); return
+        w = db.query(Website).get(wid)
+        if not w:
+            await websocket.close(code=4404); return
+    finally:
+        db.close()
+    await websocket.accept()
+    log_path = sfs.site_dir(wid) / ".runtime.log"
+    last_size = 0
+    # send initial tail
+    try:
+        await websocket.send_text(srt.tail(wid))
+        if log_path.exists():
+            last_size = log_path.stat().st_size
+    except Exception:
+        pass
+    try:
+        while True:
+            await asyncio.sleep(1.0)
+            if not log_path.exists():
+                last_size = 0
+                continue
+            sz = log_path.stat().st_size
+            if sz < last_size:
+                last_size = 0
+            if sz > last_size:
+                with open(log_path, "rb") as f:
+                    f.seek(last_size)
+                    chunk = f.read(sz - last_size)
+                last_size = sz
+                try:
+                    await websocket.send_text(chunk.decode("utf-8", errors="replace"))
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+
+
+@app.post("/api/websites/{wid}/git/sync")
+def website_git_sync(wid: int, db: Session = Depends(get_db),
+                     _: User = Depends(auth.require_admin),
+                     __=Depends(_require_flag("experimental_websites"))):
+    w = db.query(Website).get(wid)
+    if not w:
+        raise HTTPException(404, "Not found")
+    output = _website_git_sync(w)
+    return {"ok": True, "output": output or "Updated"}
 
 
 @app.get("/api/nginx/status")
