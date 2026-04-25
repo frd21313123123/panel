@@ -81,13 +81,17 @@ async function load() {
       const port = w.listen_port && w.listen_port !== 80 ? `:${w.listen_port}` : '';
       const proto = w.ssl_enabled ? 'https' : 'http';
       const isStatic = w.mode === 'static';
+      const rt = w.runtime_status || {};
+      const rtRunning = !!rt.running;
+      const hasRuntime = !!w.runtime_start_cmd;
       return `
-      <div class="card">
+      <div class="card" style="cursor:pointer" onclick="if(!event.target.closest('button,a'))location.href='/sites/${w.id}'">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
           <h3 style="word-break:break-word">${esc(w.name)}</h3>
           <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
             <span class="pill" style="background:${isStatic?'#1e40af':'#7c3aed'};color:#fff">${isStatic?'static':'proxy'}</span>
             <span class="pill ${w.is_active ? 'running' : 'offline'}">${w.is_active ? 'активен' : 'выключен'}</span>
+            ${hasRuntime ? `<span class="pill ${rtRunning?'running':'offline'}">${rtRunning?'⚙ работает':'⚙ остановлен'}</span>` : ''}
           </div>
         </div>
         <div style="font-size:13px;margin-bottom:6px;display:flex;flex-direction:column;gap:2px">
@@ -98,6 +102,7 @@ async function load() {
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${isStatic ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openFiles(${w.id})">📁 Файлы</button>` : ''}
+          ${isStatic && w.git_repo ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="gitSync(${w.id})" title="${esc(w.git_repo)}">⬇ Git pull</button>` : ''}
           <button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openEdit(${w.id})">✎ Изменить</button>
           <button class="btn btn-secondary" style="min-width:80px" onclick="toggle(${w.id})">${w.is_active ? '⏸' : '▶'}</button>
           ${!w.ssl_enabled ? `<button class="btn btn-secondary" style="min-width:80px" onclick="ssl(${w.id})">🔒 SSL</button>` : ''}
@@ -148,6 +153,20 @@ function formHtml(w) {
         <label>Дополнительные директивы nginx (опционально)</label>
         <textarea name="nginx_extra" rows="3" style="font-family:monospace;font-size:12px" placeholder="client_max_body_size 50m;">${esc(w.nginx_extra||'')}</textarea>
       </div>
+      <div class="form-group">
+        <label>GitHub репозиторий (для static-сайтов)</label>
+        <input name="git_repo" value="${esc(w.git_repo||'')}" placeholder="https://github.com/user/repo.git">
+        <div class="muted" style="font-size:11px;margin-top:4px">При создании сайта репозиторий будет склонирован в webroot. Кнопкой «Обновить из Git» — git pull.</div>
+      </div>
+      <div class="form-group">
+        <label>Ветка (опционально)</label>
+        <input name="git_branch" value="${esc(w.git_branch||'')}" placeholder="main">
+      </div>
+      <div class="form-group">
+        <label>Папка с сайтом внутри репозитория (опционально)</label>
+        <input name="web_subdir" value="${esc(w.web_subdir||'')}" placeholder="dist  или  backend/public">
+        <div class="muted" style="font-size:11px;margin-top:4px">Если index.html лежит не в корне репо — укажите подпапку (она станет nginx root).</div>
+      </div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:6px">
         <input type="checkbox" name="is_active" ${(w.is_active!==false)?'checked':''}>
         <span>Активен</span>
@@ -181,6 +200,9 @@ function bindForm(onSubmit) {
       nginx_extra: fd.get("nginx_extra") || "",
       is_active: fd.get("is_active") === "on",
       ssl_enabled: fd.get("ssl_enabled") === "on",
+      git_repo: (fd.get("git_repo") || "").trim(),
+      git_branch: (fd.get("git_branch") || "").trim(),
+      web_subdir: (fd.get("web_subdir") || "").trim(),
     };
     try { await onSubmit(payload); closeModal(); load(); loadStatus(); }
     catch (err) { toast(err.message, "error"); }
@@ -289,6 +311,16 @@ async function del(id) {
   if (!confirm("Удалить сайт, конфиг nginx и все его файлы?")) return;
   try { await api.del(`/api/websites/${id}`); toast("Удалено", "success"); load(); loadStatus(); }
   catch (e) { toast(e.message, "error"); }
+}
+
+async function gitSync(id) {
+  if (!confirm("Обновить файлы сайта из Git-репозитория? Локальные изменения в webroot будут перезаписаны.")) return;
+  toast("git pull…", "info");
+  try {
+    const r = await api.post(`/api/websites/${id}/git/sync`, {});
+    toast("Сайт обновлён из Git", "success");
+    if (r.output) console.log(r.output);
+  } catch (e) { toast(e.message, "error"); }
 }
 
 async function ssl(id) {
