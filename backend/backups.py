@@ -32,7 +32,17 @@ def restore_backup(server_id: int, filename: str):
         raise FileNotFoundError("Backup file missing")
     dst = server_dir(server_id)
     with tarfile.open(bp, "r:gz") as tar:
-        tar.extractall(dst)
+        for member in tar.getmembers():
+            target = (dst / member.name).resolve()
+            if not target.is_relative_to(dst.resolve()):
+                raise ValueError(f"Unsafe path in backup: {member.name}")
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif member.isfile():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tar.extractfile(member) as sf, open(target, "wb") as df:
+                    import shutil
+                    shutil.copyfileobj(sf, df)
 
 
 def delete_backup(server_id: int, filename: str):
@@ -43,6 +53,6 @@ def delete_backup(server_id: int, filename: str):
 
 def backup_path(server_id: int, filename: str) -> Path:
     bp = (_backup_dir(server_id) / filename).resolve()
-    if not str(bp).startswith(str(_backup_dir(server_id).resolve())):
+    if not bp.is_relative_to(_backup_dir(server_id).resolve()):
         raise ValueError("Invalid path")
     return bp

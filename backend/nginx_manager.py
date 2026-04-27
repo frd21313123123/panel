@@ -21,6 +21,22 @@ def generate_config(
     listen_port: int = 80,
     webroot: str = "",
 ) -> str:
+    import re
+    for val in [domain, proxy_pass, webroot] + (extra_domains or []):
+        if val and re.search(r'[\{\}\n;]', str(val)):
+            raise ValueError("Invalid characters in configuration values")
+    
+    if extra_config:
+        depth = 0
+        for char in extra_config:
+            if char == '{': depth += 1
+            elif char == '}':
+                depth -= 1
+                if depth < 0:
+                    raise ValueError("extra_config cannot close the server block")
+        if depth != 0:
+            raise ValueError("Unbalanced braces in extra_config")
+
     """Build nginx server block.
 
     mode="proxy"  → proxy_pass to backend

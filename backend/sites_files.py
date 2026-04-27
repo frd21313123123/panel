@@ -20,7 +20,7 @@ def site_dir(site_id: int) -> Path:
 def _safe(site_id: int, rel: str) -> Path:
     root = site_dir(site_id).resolve()
     target = (root / (rel or "").lstrip("/\\")).resolve()
-    if not str(target).startswith(str(root)):
+    if not target.is_relative_to(root):
         raise HTTPException(400, "Path escapes site directory")
     return target
 
@@ -74,7 +74,7 @@ def extract_archive(site_id: int, rel: str) -> int:
 
     def safe_dest(member_path: str) -> Path:
         target = (dest / member_path).resolve()
-        if not str(target).startswith(str(root)):
+        if not target.is_relative_to(root):
             raise HTTPException(400, f"Unsafe path in archive: {member_path}")
         return target
 
