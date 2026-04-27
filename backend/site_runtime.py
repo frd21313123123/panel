@@ -15,7 +15,7 @@ from pathlib import Path
 
 import sites_files as sfs
 
-_procs: dict[int, subprocess.Popen] = {}
+_procs: dict[int, any] = {}
 _lock = threading.Lock()
 LOG_MAX = 5 * 1024 * 1024
 
@@ -30,7 +30,7 @@ def _cwd(w) -> Path:
     if not sub:
         return base
     target = (base / sub).resolve()
-    if not str(target).startswith(str(base.resolve())):
+    if not target.is_relative_to(base.resolve()):
         return base
     target.mkdir(parents=True, exist_ok=True)
     return target
@@ -48,7 +48,7 @@ def _build_env(w) -> dict:
         env[k.strip()] = v.strip()
     if getattr(w, "runtime_port", 0):
         env.setdefault("PORT", str(w.runtime_port))
-        env.setdefault("HOST", "127.0.0.1")
+        env.setdefault("HOST", "0.0.0.0")
     return env
 
 
@@ -72,6 +72,53 @@ def _rotate(path: Path):
         pass
 
 
+class DockerProc:
+    def __init__(self, container, log_fh):
+        self.c = container
+        self.pid = container.id[:12]
+        self.log_fh = log_fh
+        self._exit_code = None
+        self._thread = threading.Thread(target=self._stream_logs, daemon=True)
+        self._thread.start()
+
+    def _stream_logs(self):
+        try:
+            for chunk in self.c.logs(stream=True, follow=True, stdout=True, stderr=True):
+                self.log_fh.write(chunk)
+                self.log_fh.flush()
+            res = self.c.wait()
+            self._exit_code = res.get("StatusCode", 0)
+        except Exception:
+            self._exit_code = -1
+        finally:
+            try: self.c.remove(force=True)
+            except Exception: pass
+
+    def poll(self):
+        if self._exit_code is not None:
+            return self._exit_code
+        try:
+            self.c.reload()
+            if self.c.status == "running":
+                return None
+            if self.c.status == "exited":
+                return self._exit_code or 0
+        except Exception:
+            return self._exit_code or -1
+        return None
+
+    def terminate(self):
+        try: self.c.stop(timeout=10)
+        except Exception: pass
+
+    def kill(self):
+        try: self.c.kill()
+        except Exception: pass
+
+    def wait(self, timeout=None):
+        self._thread.join(timeout)
+
+
 def status(site_id: int) -> dict:
     with _lock:
         p = _procs.get(site_id)
@@ -79,7 +126,7 @@ def status(site_id: int) -> dict:
             return {"running": False, "pid": 0, "exit_code": None}
         rc = p.poll()
         if rc is None:
-            return {"running": True, "pid": p.pid, "exit_code": None}
+            return {"running": True, "pid": getattr(p, "pid", 0), "exit_code": None}
         # finished
         _procs.pop(site_id, None)
         return {"running": False, "pid": 0, "exit_code": rc}
@@ -91,14 +138,10 @@ def stop(site_id: int, timeout: float = 10.0):
     if not p or p.poll() is not None:
         return False
     try:
-        # try terminate process group
-        try: os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-        except (OSError, AttributeError): p.terminate()
-        try:
-            p.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            try: os.killpg(os.getpgid(p.pid), signal.SIGKILL)
-            except (OSError, AttributeError): p.kill()
+        p.terminate()
+        p.wait(timeout=timeout)
+        if p.poll() is None:
+            p.kill()
             p.wait(timeout=5)
     except Exception:
         pass
@@ -123,15 +166,36 @@ def start(w) -> tuple[bool, str]:
     fh.write(f"\n--- start {time.strftime('%Y-%m-%d %H:%M:%S')} | cwd={cwd} | cmd={cmd}\n".encode())
     fh.flush()
 
+    import docker
     try:
-        p = subprocess.Popen(
-            shlex.split(cmd) if not any(c in cmd for c in "|&;<>$`") else ["sh", "-c", cmd],
-            cwd=str(cwd),
-            env=_build_env(w),
-            stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            preexec_fn=os.setsid if hasattr(os, "setsid") else None,
-            close_fds=True,
+        client = docker.from_env()
+        env = _build_env(w)
+        image = "node:20-bookworm"
+        try: client.images.get(image)
+        except docker.errors.NotFound: client.images.pull(image)
+
+        c_name = f"panel_site_{w.id}"
+        try:
+            client.containers.get(c_name).remove(force=True)
+        except docker.errors.NotFound:
+            pass
+
+        port_bindings = {}
+        if getattr(w, "runtime_port", 0):
+            port_bindings[f"{w.runtime_port}/tcp"] = ("127.0.0.1", int(w.runtime_port))
+
+        c = client.containers.create(
+            image=image,
+            command=["sh", "-c", cmd],
+            name=c_name,
+            working_dir="/site",
+            volumes={str(cwd): {"bind": "/site", "mode": "rw"}},
+            environment=env,
+            ports=port_bindings if port_bindings else None,
+            detach=True
         )
+        c.start()
+        p = DockerProc(c, fh)
     except Exception as e:
         try: fh.close()
         except Exception: pass
@@ -163,19 +227,38 @@ def run_install(w) -> tuple[bool, str]:
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "ab", buffering=0) as fh:
         fh.write(f"\n--- install {time.strftime('%Y-%m-%d %H:%M:%S')} | cmd={cmd}\n".encode())
+        import docker
         try:
-            r = subprocess.run(
-                shlex.split(cmd) if not any(c in cmd for c in "|&;<>$`") else ["sh", "-c", cmd],
-                cwd=str(cwd), env=_build_env(w),
-                stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                timeout=900,
+            client = docker.from_env()
+            env = _build_env(w)
+            image = "node:20-bookworm"
+            try: client.images.get(image)
+            except docker.errors.NotFound: client.images.pull(image)
+
+            c_name = f"panel_site_{w.id}_install"
+            try:
+                client.containers.get(c_name).remove(force=True)
+            except docker.errors.NotFound:
+                pass
+
+            c = client.containers.run(
+                image=image,
+                command=["sh", "-c", cmd],
+                name=c_name,
+                working_dir="/site",
+                volumes={str(cwd): {"bind": "/site", "mode": "rw"}},
+                environment=env,
+                detach=True
             )
-        except subprocess.TimeoutExpired:
-            return False, "Установка прервана по таймауту (15 мин)"
+            for chunk in c.logs(stream=True, follow=True, stdout=True, stderr=True):
+                fh.write(chunk)
+                fh.flush()
+            res = c.wait()
+            c.remove(force=True)
+            if res.get("StatusCode", 0) != 0:
+                return False, f"install завершился с кодом {res.get('StatusCode', 0)}"
         except Exception as e:
             return False, f"Ошибка: {e}"
-    if r.returncode != 0:
-        return False, f"install завершился с кодом {r.returncode}"
     return True, "install выполнен успешно"
 
 

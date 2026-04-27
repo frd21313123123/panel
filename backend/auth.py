@@ -6,10 +6,23 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 import os
+from pathlib import Path
+import secrets
 
 from database import get_db, User
 
-SECRET_KEY = os.environ.get("PANEL_SECRET", "change-me-in-production-very-secret-key")
+SECRET_KEY = os.environ.get("PANEL_SECRET")
+if not SECRET_KEY or SECRET_KEY == "change-me-in-production-very-secret-key":
+    _secret_file = Path(os.environ.get("PANEL_DATA_ROOT", "./data")) / ".secret"
+    _secret_file.parent.mkdir(parents=True, exist_ok=True)
+    if _secret_file.exists():
+        SECRET_KEY = _secret_file.read_text().strip()
+    else:
+        SECRET_KEY = secrets.token_urlsafe(32)
+        _secret_file.write_text(SECRET_KEY)
+        try: _secret_file.chmod(0o600)
+        except OSError: pass
+
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24 * 7
 

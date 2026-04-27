@@ -22,7 +22,7 @@ def is_archive(name: str) -> bool:
 def _safe(server_id: int, rel: str) -> Path:
     root = server_dir(server_id).resolve()
     target = (root / rel.lstrip("/\\")).resolve()
-    if not str(target).startswith(str(root)):
+    if not target.is_relative_to(root):
         raise HTTPException(400, "Path escapes server directory")
     return target
 
@@ -114,7 +114,7 @@ def extract_archive(server_id: int, rel: str, dest_rel: str = "") -> int:
     def safe_dest(member_path: str) -> Path:
         """Защита от zip-slip."""
         target = (dest / member_path).resolve()
-        if not str(target).startswith(str(root)):
+        if not target.is_relative_to(root):
             raise HTTPException(400, f"Unsafe path in archive: {member_path}")
         return target
 

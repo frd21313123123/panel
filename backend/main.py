@@ -41,15 +41,17 @@ def startup():
     db = SessionLocal()
     try:
         if db.query(User).count() == 0:
+            import secrets
+            rand_pass = secrets.token_urlsafe(8)
             admin = User(
                 username="admin",
                 email="admin@panel.local",
-                password_hash=auth.hash_password("admin"),
+                password_hash=auth.hash_password(rand_pass),
                 is_admin=True,
             )
             db.add(admin)
             db.commit()
-            print("[panel] default admin created: admin / admin")
+            print(f"[panel] default admin created: admin / {rand_pass}")
     finally:
         db.close()
     scheduler.start_background()
