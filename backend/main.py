@@ -440,6 +440,11 @@ def _run_git(args: list[str], cwd: Path, check: bool = True):
     if not shutil.which("git"):
         raise HTTPException(500, "Git is not installed on the panel host")
 
+    # Security: prevent option injection by ensuring no argument starts with '-' 
+    # unless it's a known safe command/flag we explicitly provided.
+    # However, since we control 'args' in our calling code, we'll focus on 
+    # using '--' where user input is involved.
+
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -455,7 +460,8 @@ def _run_git(args: list[str], cwd: Path, check: bool = True):
 
     output = _git_output(proc.stdout, proc.stderr)
     if check and proc.returncode != 0:
-        raise HTTPException(400, output or f"Git command failed: git {' '.join(args)}")
+        # Don't leak full command in error if it might contain secrets (though unlikely here)
+        raise HTTPException(400, output or "Git command failed")
     return proc.returncode, output
 
 
@@ -463,10 +469,16 @@ def _sync_server_repo(s: Server) -> str:
     repo = (s.git_repo or "").strip()
     if not s.git_auto_update or not repo:
         return ""
+    
+    if repo.startswith("-"):
+        raise HTTPException(400, "Invalid git repository URL")
 
     worktree = fs._safe(s.id, _clean_git_subdir(s.git_subdir))
     worktree.mkdir(parents=True, exist_ok=True)
     branch = (s.git_branch or "").strip()
+    if branch.startswith("-"):
+        raise HTTPException(400, "Invalid git branch name")
+    
     messages = []
 
     if (worktree / ".git").exists():
@@ -479,11 +491,12 @@ def _sync_server_repo(s: Server) -> str:
             raise HTTPException(400, "Git auto-update stopped: repository has local changes")
 
         if branch:
-            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
-            code, _ = _run_git(["checkout", branch], worktree, check=False)
+            messages.append(_run_git(["fetch", "origin", "--", branch], worktree)[1])
+            code, _ = _run_git(["checkout", "--", branch], worktree, check=False)
             if code != 0:
-                _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
-            messages.append(_run_git(["pull", "--ff-only", "origin", branch], worktree)[1])
+                # Use origin/{branch} safely with --
+                messages.append(_run_git(["checkout", "-b", branch, "--", f"origin/{branch}"], worktree)[1])
+            messages.append(_run_git(["pull", "--ff-only", "origin", "--", branch], worktree)[1])
         else:
             messages.append(_run_git(["pull", "--ff-only"], worktree)[1])
     else:
@@ -493,7 +506,8 @@ def _sync_server_repo(s: Server) -> str:
         clone_args = ["clone"]
         if branch:
             clone_args += ["--branch", branch, "--single-branch"]
-        clone_args += [repo, "."]
+        # Security: use -- to separate options from URL and path
+        clone_args += ["--", repo, "."]
         messages.append(_run_git(clone_args, worktree)[1])
 
     return "\n".join(msg for msg in messages if msg).strip()
@@ -1345,21 +1359,27 @@ def _website_git_sync(w: Website) -> str:
     repo = (w.git_repo or "").strip()
     if not repo:
         raise HTTPException(400, "Git repository is not configured for this site")
+    
+    if repo.startswith("-"):
+        raise HTTPException(400, "Invalid git repository URL")
 
     worktree = sfs.site_dir(w.id)
     branch = (w.git_branch or "").strip()
+    if branch.startswith("-"):
+        raise HTTPException(400, "Invalid git branch name")
+    
     messages = []
 
     if (worktree / ".git").exists():
         _, origin = _run_git(["config", "--get", "remote.origin.url"], worktree, check=False)
         if origin and origin.strip() != repo:
-            _run_git(["remote", "set-url", "origin", repo], worktree)
+            _run_git(["remote", "set-url", "origin", "--", repo], worktree)
         if branch:
-            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
-            code, _ = _run_git(["checkout", branch], worktree, check=False)
+            messages.append(_run_git(["fetch", "origin", "--", branch], worktree)[1])
+            code, _ = _run_git(["checkout", "--", branch], worktree, check=False)
             if code != 0:
-                _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
-            messages.append(_run_git(["reset", "--hard", f"origin/{branch}"], worktree)[1])
+                _run_git(["checkout", "-b", branch, "--", f"origin/{branch}"], worktree)
+            messages.append(_run_git(["reset", "--hard", "--", f"origin/{branch}"], worktree)[1])
         else:
             messages.append(_run_git(["pull", "--ff-only"], worktree)[1])
     else:
@@ -1375,7 +1395,7 @@ def _website_git_sync(w: Website) -> str:
         clone_args = ["clone"]
         if branch:
             clone_args += ["--branch", branch, "--single-branch"]
-        clone_args += [repo, "."]
+        clone_args += ["--", repo, "."]
         messages.append(_run_git(clone_args, worktree)[1])
 
     return "\n".join(m for m in messages if m).strip()
