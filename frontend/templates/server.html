@@ -35,13 +35,13 @@
     <div class="card">
       <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Управление питанием</div>
       <div class="power-row">
-        <button class="btn btn-success" onclick="power('start')" title="Запустить контейнер">▶ Запустить</button>
-        <button class="btn btn-warn" onclick="power('restart')" title="Перезапустить контейнер (плавно)">↻ Рестарт</button>
-        <button class="btn btn-secondary" onclick="power('stop')" title="Остановить контейнер (SIGTERM)">■ Стоп</button>
-        <button class="btn btn-danger" onclick="power('kill')" title="Принудительно убить контейнер (SIGKILL)">✕ Kill</button>
-        <button class="btn btn-secondary" onclick="power('rebuild')" title="Удалить и создать заново с новыми настройками">🔧 Пересоздать</button>
+        <button class="btn btn-success power-btn" onclick="power('start')" title="Запустить контейнер"><span class="btn-icon">▶</span><span>Запустить</span></button>
+        <button class="btn btn-warn power-btn" onclick="power('restart')" title="Перезапустить контейнер (плавно)"><span class="btn-icon">↻</span><span>Рестарт</span></button>
+        <button class="btn btn-secondary power-btn" onclick="power('stop')" title="Остановить контейнер (SIGTERM)"><span class="btn-icon">■</span><span>Стоп</span></button>
+        <button class="btn btn-danger power-btn" onclick="power('kill')" title="Принудительно убить контейнер (SIGKILL)"><span class="btn-icon">×</span><span>Kill</span></button>
+        <button class="btn btn-secondary power-btn" onclick="power('rebuild')" title="Удалить и создать заново с новыми настройками"><span class="btn-icon">↺</span><span>Пересоздать</span></button>
         <span class="right"></span>
-        <button class="btn btn-danger" onclick="deleteServer()" title="Полностью удалить сервер со всеми данными">🗑 Удалить сервер</button>
+        <button class="btn btn-danger power-btn" onclick="deleteServer()" title="Полностью удалить сервер со всеми данными"><span class="btn-icon">×</span><span>Удалить сервер</span></button>
       </div>
     </div>
 
@@ -53,28 +53,28 @@
             <span class="label">Процессор</span>
             <span class="value" id="stCpu" style="font-size:18px;color:var(--accent)">—</span>
           </div>
-          <div style="height:110px;margin-top:6px;"><canvas id="cpuChart"></canvas></div>
+          <div class="chart-shell offline" style="height:110px;margin-top:6px;"><canvas id="cpuChart"></canvas><div class="chart-offline">offline</div></div>
         </div>
         <div class="stat" style="padding:12px;" title="Оперативная память: занято / лимит">
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span class="label">ОЗУ (занято / лимит)</span>
             <span class="value" id="stMem" style="font-size:14px;color:var(--green)">—</span>
           </div>
-          <div style="height:110px;margin-top:6px;"><canvas id="memChart"></canvas></div>
+          <div class="chart-shell offline" style="height:110px;margin-top:6px;"><canvas id="memChart"></canvas><div class="chart-offline">offline</div></div>
         </div>
         <div class="stat" style="padding:12px;" title="Сетевой трафик: входящий (синяя линия) и исходящий (красная)">
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span class="label">Сеть (приём / отдача)</span>
             <span class="value" id="stNet" style="font-size:13px;">—</span>
           </div>
-          <div style="height:110px;margin-top:6px;"><canvas id="netChart"></canvas></div>
+          <div class="chart-shell offline" style="height:110px;margin-top:6px;"><canvas id="netChart"></canvas><div class="chart-offline">offline</div></div>
         </div>
         <div class="stat" style="padding:12px;" title="Размер данных сервера на диске (папка /home/container)">
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span class="label">Занято на диске</span>
             <span class="value" id="stDisk" style="font-size:18px;color:var(--yellow)">—</span>
           </div>
-          <div style="height:110px;margin-top:6px;"><canvas id="diskChart"></canvas></div>
+          <div class="chart-shell offline" style="height:110px;margin-top:6px;"><canvas id="diskChart"></canvas><div class="chart-offline">offline</div></div>
         </div>
       </div>
       <div class="stat-grid" style="margin-top:12px;">
@@ -96,13 +96,13 @@
 
     <div id="tab-console">
       <div class="card">
-        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Интерактивный терминал</div>
+        <div style="font-size:11px;text-transform:uppercase;color:var(--text-muted);letter-spacing:.05em;margin-bottom:8px;">Консоль событий и терминал</div>
         <div id="term" style="height:480px;background:#000;padding:6px;border-radius:4px;"></div>
         <div style="margin-top:10px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
           <button class="btn btn-secondary" onclick="connectTerm('/bin/sh')" title="Подключиться через sh (есть в любом образе)">Подключить sh</button>
           <button class="btn btn-secondary" onclick="connectTerm('/bin/bash')" title="Подключиться через bash (если установлен в образе)">Подключить bash</button>
           <button class="btn btn-secondary" onclick="disconnectTerm()">Отключить</button>
-          <span class="muted" style="font-size:11px;margin-left:auto">Для ввода команд сперва запустите сервер и нажмите «Подключить sh/bash»</span>
+          <span class="muted" style="font-size:11px;margin-left:auto">События сервера показываются автоматически. Для ввода команд подключите sh/bash.</span>
         </div>
       </div>
     </div>
@@ -213,7 +213,7 @@
         <h3 style="margin-bottom:4px">GitHub автообновление</h3>
         <div class="muted" style="font-size:12px;margin-bottom:10px">
           Если включено, перед стартом/рестартом панель сама обновит код через <code>git clone</code> или <code>git pull</code>.
-          Папка должна быть пустой либо уже быть git-репозиторием без локальных изменений.
+          Если Git URL заполнен, автообновление включится при сохранении. Папка должна быть пустой либо уже быть git-репозиторием без локальных изменений.
         </div>
         <div class="form-group"><label>Git URL</label><input id="setGitRepo" placeholder="https://github.com/user/repo.git"></div>
         <div class="form-group"><label>Ветка</label><input id="setGitBranch" placeholder="main"></div>
@@ -235,6 +235,7 @@ const SID = {{ server_id }};
 let server = null;
 let statsWs = null;
 let termWs = null;
+let logWs = null;
 let term = null, fitAddon = null;
 let curPath = "";
 
@@ -285,13 +286,17 @@ function termLog(msg, ansiColor) {
   term.write(`\r\n${col}[${ts}] ${msg}\x1b[0m\r\n`);
 }
 
+function termWriteLog(text) {
+  if (!term || !text) return;
+  term.write(String(text).replace(/\r?\n/g, "\r\n"));
+}
+
 async function power(action) {
   const label = _actionLabel[action] || action;
   termLog(`${label}…`, "\x1b[33m");
   try {
     const r = await api.post(`/api/servers/${SID}/power/${action}`);
     setStatus(r.status);
-    if (r.message) termLog(r.message, "\x1b[36m");
     termLog(`Статус: ${r.status}`, _statusAnsi[r.status] || "\x1b[36m");
   } catch (e) {
     termLog(`Ошибка: ${e.message}`, "\x1b[31m");
@@ -310,6 +315,7 @@ const MAX_POINTS = 30;
 let cpuChart = null, memChart = null, netChart = null, diskChart = null;
 let lastStatus = null;
 let prevNet = null;  // { t, rx, tx } for delta calc
+let statsHistoryLoaded = false;
 
 function buildChart(ctx, color, yFmt, extraDataset) {
   const datasets = [{
@@ -365,9 +371,63 @@ function pushPoint(chart, v, ds = 0) {
   chart.update("none");
 }
 
+function setDataset(chart, values, ds = 0) {
+  chart.data.datasets[ds].data = values.slice(-MAX_POINTS);
+  const pad = chart.data.datasets[ds].data.length ? chart.data.datasets[ds].data[0] : null;
+  while (chart.data.datasets[ds].data.length < MAX_POINTS) chart.data.datasets[ds].data.unshift(pad);
+  chart.update("none");
+}
+
+function setChartsOffline(isOffline) {
+  document.querySelectorAll(".chart-shell").forEach(el => {
+    el.classList.toggle("offline", isOffline);
+  });
+}
+
+function applyStatsHistory(history) {
+  if (!Array.isArray(history) || !history.length || !cpuChart || statsHistoryLoaded) return;
+  statsHistoryLoaded = true;
+
+  const cpu = [];
+  const mem = [];
+  const disk = [];
+  const rx = [];
+  const tx = [];
+  let previous = null;
+
+  history.slice(-MAX_POINTS).forEach(point => {
+    cpu.push(point.cpu || 0);
+    mem.push(point.mem || 0);
+    disk.push(point.disk || 0);
+
+    let rxRate = 0;
+    let txRate = 0;
+    if (previous && point.status === "running") {
+      const dt = Math.max(0.001, (point.t || 0) - (previous.t || 0));
+      rxRate = Math.max(0, ((point.net_rx || 0) - (previous.net_rx || 0)) / dt);
+      txRate = Math.max(0, ((point.net_tx || 0) - (previous.net_tx || 0)) / dt);
+    }
+    rx.push(rxRate);
+    tx.push(txRate);
+    previous = point;
+  });
+
+  setDataset(cpuChart, cpu);
+  setDataset(memChart, mem);
+  setDataset(diskChart, disk);
+  setDataset(netChart, rx, 0);
+  setDataset(netChart, tx, 1);
+
+  const last = history[history.length - 1];
+  if (last) prevNet = { t: (last.t || Date.now() / 1000) * 1000, rx: last.net_rx || 0, tx: last.net_tx || 0 };
+}
+
 async function pollStats() {
   try {
     const d = await api.get(`/api/servers/${SID}/stats`);
+    applyStatsHistory(d.history);
+    const offline = d.status !== "running";
+    setChartsOffline(offline);
     document.getElementById("stCpu").textContent = d.cpu + " %";
     document.getElementById("stMem").textContent = fmtBytes(d.mem) + " / " + fmtBytes(d.mem_limit);
     document.getElementById("stDisk").textContent = fmtBytes(d.disk || 0);
@@ -435,6 +495,27 @@ function connectTerm(shell) {
 }
 function disconnectTerm() {
   if (termWs) { try { termWs.close(); } catch (e) {} termWs = null; }
+}
+
+function connectConsoleLog() {
+  initTerm();
+  if (logWs) { try { logWs.close(); } catch (e) {} logWs = null; }
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  logWs = new WebSocket(`${proto}://${location.host}/ws/servers/${SID}/console`);
+  logWs.onopen = () => termLog("Поток событий подключён", "\x1b[32m");
+  logWs.onmessage = ev => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "log") termWriteLog(msg.data);
+      else if (msg.type === "error") termLog(msg.message || "Ошибка консоли", "\x1b[31m");
+    } catch (e) {
+      termWriteLog(ev.data);
+    }
+  };
+  logWs.onclose = () => {
+    termLog("Поток событий отключён, переподключаюсь…", "\x1b[33m");
+    setTimeout(connectConsoleLog, 2000);
+  };
 }
 
 // ---------- Files ----------
@@ -623,21 +704,22 @@ async function saveNetwork(){
 // ---------- Settings ----------
 async function saveSettings(){
   try {
+    const gitRepo = document.getElementById("setGitRepo").value.trim();
     await api.req(`/api/servers/${SID}`, { method:"PATCH", body: JSON.stringify({
       name: document.getElementById("setName").value,
       startup_cmd: document.getElementById("setCmd").value,
       memory_mb: parseInt(document.getElementById("setMem").value),
       cpu_limit: parseInt(document.getElementById("setCpu").value),
-      git_repo: document.getElementById("setGitRepo").value,
+      git_repo: gitRepo,
       git_branch: document.getElementById("setGitBranch").value,
       git_subdir: document.getElementById("setGitSubdir").value,
-      git_auto_update: document.getElementById("setGitAuto").checked,
+      git_auto_update: !!gitRepo || document.getElementById("setGitAuto").checked,
     })});
     toast("Сохранено","success"); loadServer();
   } catch(e){ toast(e.message,"error"); }
 }
 
-(async () => { await loadServer(); initTerm(); connectStats(); taskbar.startPolling(SID); })();
+(async () => { await loadServer(); initTerm(); connectConsoleLog(); connectStats(); taskbar.startPolling(SID); })();
 </script>
 </body>
 </html>

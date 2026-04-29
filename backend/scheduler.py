@@ -45,8 +45,11 @@ def execute(s: Schedule, db: Session):
     if not srv:
         return
     try:
+        dm.append_event(srv.id, f"Schedule: '{s.name}' running action={s.action}")
         if s.action == "command":
-            dm.exec_command(srv.id, s.payload or "echo")
+            out = dm.exec_command(srv.id, s.payload or "echo")
+            if out:
+                dm.append_event(srv.id, f"Schedule command output:\n{out}")
         elif s.action == "restart":
             if dm.inspect(srv.id):
                 dm.restart(srv.id)
@@ -57,7 +60,9 @@ def execute(s: Schedule, db: Session):
                 dm.start(srv.id)
         s.last_run = datetime.utcnow()
         db.commit()
+        dm.append_event(srv.id, f"Schedule: '{s.name}' finished")
     except Exception as e:
+        dm.append_event(srv.id, f"Schedule: '{s.name}' failed: {e}")
         print(f"[scheduler] error in schedule {s.id}: {e}")
 
 
