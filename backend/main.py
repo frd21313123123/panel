@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional, List
 
@@ -28,10 +29,37 @@ import tasks as tk
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+_stats_sampler_started = False
 
 app = FastAPI(title="Panel", version="0.1.0")
 templates = Jinja2Templates(directory=str(FRONTEND_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR / "static")), name="static")
+
+
+def _start_stats_sampler():
+    global _stats_sampler_started
+    if _stats_sampler_started:
+        return
+    _stats_sampler_started = True
+
+    def _loop():
+        while True:
+            db = SessionLocal()
+            try:
+                ids = [row[0] for row in db.query(Server.id).all()]
+            except Exception:
+                ids = []
+            finally:
+                db.close()
+
+            for sid in ids:
+                try:
+                    dm.stats(sid, record=True)
+                except Exception:
+                    pass
+            time.sleep(2)
+
+    threading.Thread(target=_loop, daemon=True, name="panel-stats-sampler").start()
 
 
 @app.on_event("startup")
@@ -56,6 +84,8 @@ def startup():
         db.close()
     scheduler.start_background()
     print("[panel] scheduler started")
+    _start_stats_sampler()
+    print("[panel] stats sampler started")
     try:
         srt.auto_start_all(SessionLocal)
         print("[panel] site runtime auto-start complete")
@@ -436,9 +466,31 @@ def _git_output(stdout: str, stderr: str) -> str:
     return "\n".join(parts).strip()
 
 
+def _safe_git_label(repo: str) -> str:
+    text = (repo or "").strip()
+    if "://" in text and "@" in text.split("://", 1)[1].split("/", 1)[0]:
+        proto, rest = text.split("://", 1)
+        host_and_path = rest.split("@", 1)[1]
+        return f"{proto}://***@{host_and_path}"
+    return text
+
+
+def _record_git_output(sid: int, title: str, output: str):
+    output = (output or "").strip()
+    if output:
+        dm.append_event(sid, f"{title}\n{output}")
+    else:
+        dm.append_event(sid, title)
+
+
 def _run_git(args: list[str], cwd: Path, check: bool = True):
     if not shutil.which("git"):
         raise HTTPException(500, "Git is not installed on the panel host")
+
+    # Security: prevent option injection by ensuring no argument starts with '-' 
+    # unless it's a known safe command/flag we explicitly provided.
+    # However, since we control 'args' in our calling code, we'll focus on 
+    # using '--' where user input is involved.
 
     try:
         proc = subprocess.run(
@@ -455,46 +507,93 @@ def _run_git(args: list[str], cwd: Path, check: bool = True):
 
     output = _git_output(proc.stdout, proc.stderr)
     if check and proc.returncode != 0:
-        raise HTTPException(400, output or f"Git command failed: git {' '.join(args)}")
+        # Don't leak full command in error if it might contain secrets (though unlikely here)
+        raise HTTPException(400, output or "Git command failed")
     return proc.returncode, output
 
 
 def _sync_server_repo(s: Server) -> str:
     repo = (s.git_repo or "").strip()
-    if not s.git_auto_update or not repo:
-        return ""
+    if not s.git_auto_update:
+        msg = "Git: auto-update is disabled for this server"
+        dm.append_event(s.id, msg)
+        return msg
+    if not repo:
+        msg = "Git: auto-update is enabled, but repository URL is empty"
+        dm.append_event(s.id, msg)
+        return msg
+    
+    if repo.startswith("-"):
+        dm.append_event(s.id, "Git: invalid repository URL")
+        raise HTTPException(400, "Invalid git repository URL")
 
     worktree = fs._safe(s.id, _clean_git_subdir(s.git_subdir))
     worktree.mkdir(parents=True, exist_ok=True)
     branch = (s.git_branch or "").strip()
-    messages = []
+    if branch.startswith("-"):
+        dm.append_event(s.id, "Git: invalid branch name")
+        raise HTTPException(400, "Invalid git branch name")
+    
+    messages = [f"Git: auto-update enabled for {_safe_git_label(repo)}"]
+    if branch:
+        messages.append(f"Git: target branch is '{branch}'")
+    if _clean_git_subdir(s.git_subdir):
+        messages.append(f"Git: target folder is '{_clean_git_subdir(s.git_subdir)}'")
+    dm.append_event(s.id, "\n".join(messages))
 
     if (worktree / ".git").exists():
+        dm.append_event(s.id, "Git: existing repository found, checking status")
         _, origin = _run_git(["config", "--get", "remote.origin.url"], worktree, check=False)
         if origin and origin.strip() != repo:
+            dm.append_event(s.id, "Git: configured URL does not match this folder's origin remote")
             raise HTTPException(400, "Configured Git URL does not match this folder's origin remote")
 
         _, dirty = _run_git(["status", "--porcelain"], worktree, check=False)
         if dirty.strip():
+            _record_git_output(s.id, "Git: local changes detected; auto-update stopped", dirty)
             raise HTTPException(400, "Git auto-update stopped: repository has local changes")
 
         if branch:
-            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
+            _record_git_output(s.id, f"Git: fetching origin/{branch}", "")
+            messages.append(_run_git(["fetch", "origin", branch], worktree)[1])
             code, _ = _run_git(["checkout", branch], worktree, check=False)
             if code != 0:
-                _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
-            messages.append(_run_git(["pull", "--ff-only", "origin", branch], worktree)[1])
+                # Use origin/{branch} safely with --
+                dm.append_event(s.id, f"Git: creating local branch '{branch}' from origin/{branch}")
+                messages.append(_run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)[1])
+            _record_git_output(s.id, f"Git: pulling origin/{branch}", "")
+            pull_output = _run_git(["pull", "--ff-only", "origin", branch], worktree)[1]
+            messages.append(pull_output)
+            _record_git_output(s.id, "Git: pull result", pull_output or "Already up to date")
         else:
-            messages.append(_run_git(["pull", "--ff-only"], worktree)[1])
+            _record_git_output(s.id, "Git: pulling current branch", "")
+            pull_output = _run_git(["pull", "--ff-only"], worktree)[1]
+            messages.append(pull_output)
+            _record_git_output(s.id, "Git: pull result", pull_output or "Already up to date")
     else:
         if any(worktree.iterdir()):
+            dm.append_event(s.id, "Git: target folder is not empty; clone stopped")
             raise HTTPException(400, "Git auto-update target folder is not empty")
 
         clone_args = ["clone"]
         if branch:
             clone_args += ["--branch", branch, "--single-branch"]
-        clone_args += [repo, "."]
-        messages.append(_run_git(clone_args, worktree)[1])
+        # Security: use -- to separate options from URL and path
+        clone_args += ["--", repo, "."]
+        dm.append_event(s.id, "Git: repository not found locally, cloning")
+        clone_output = _run_git(clone_args, worktree)[1]
+        messages.append(clone_output)
+        _record_git_output(s.id, "Git: clone result", clone_output or "Clone complete")
+
+    _, status = _run_git(["status", "-sb"], worktree, check=False)
+    _, head = _run_git(["rev-parse", "--short", "HEAD"], worktree, check=False)
+    if head:
+        messages.append(f"Git HEAD: {head.strip()}")
+        dm.append_event(s.id, f"Git: current commit {head.strip()}")
+    if status:
+        messages.append(f"Git status:\n{status}")
+        _record_git_output(s.id, "Git: status after update", status)
+    dm.append_event(s.id, "Git: auto-update complete")
 
     return "\n".join(msg for msg in messages if msg).strip()
 
@@ -600,43 +699,62 @@ def delete_server(sid: int, db: Session = Depends(get_db), user: User = Depends(
 @app.post("/api/servers/{sid}/power/{action}")
 def power(sid: int, action: str, db: Session = Depends(get_db), user: User = Depends(auth.get_current_user)):
     s = _server_for(db, sid, user)
+    labels = {
+        "start": "start",
+        "stop": "stop",
+        "restart": "restart",
+        "kill": "kill",
+        "rebuild": "rebuild",
+    }
+    if action not in labels:
+        raise HTTPException(400, "Unknown action")
+    dm.append_event(s.id, f"Power: {labels[action]} requested by {user.username}")
     if not dm.docker_available():
+        dm.append_event(s.id, "Docker: not available on this host")
         raise HTTPException(503, "Docker is not available on this host")
     ports = _parse_json(s.ports, [])
     env = _parse_json(s.env_vars, {})
     cmd = s.startup_cmd or s.egg.default_cmd
     git_message = ""
-    if action == "start":
-        git_message = _sync_server_repo(s)
-        if not dm.inspect(s.id):
-            dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
-        dm.start(s.id)
-    elif action == "stop":
-        dm.stop(s.id)
-    elif action == "restart":
-        git_message = _sync_server_repo(s)
-        if not dm.inspect(s.id):
-            dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
+    try:
+        if action == "start":
+            git_message = _sync_server_repo(s)
+            if not dm.inspect(s.id):
+                dm.append_event(s.id, "Docker: no existing container, creating one")
+                dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
             dm.start(s.id)
-        else:
-            dm.restart(s.id)
-    elif action == "kill":
-        dm.kill(s.id)
-    elif action == "rebuild":
-        git_message = _sync_server_repo(s)
-        dm.remove(s.id)
-        dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
-    else:
-        raise HTTPException(400, "Unknown action")
-    s.status = dm.status(s.id)
-    db.commit()
-    return {"status": s.status, "message": git_message}
+        elif action == "stop":
+            dm.stop(s.id)
+        elif action == "restart":
+            git_message = _sync_server_repo(s)
+            if not dm.inspect(s.id):
+                dm.append_event(s.id, "Docker: no existing container, creating one")
+                dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
+                dm.start(s.id)
+            else:
+                dm.restart(s.id)
+        elif action == "kill":
+            dm.kill(s.id)
+        elif action == "rebuild":
+            git_message = _sync_server_repo(s)
+            dm.remove_container(s.id)
+            dm.create_container(s.id, s.egg.docker_image, cmd, s.memory_mb, s.cpu_limit, ports, env)
+        s.status = dm.status(s.id)
+        dm.append_event(s.id, f"Power: {labels[action]} finished, status={s.status}")
+        db.commit()
+        return {"status": s.status, "message": git_message}
+    except HTTPException as e:
+        dm.append_event(s.id, f"Power: {labels[action]} failed: {e.detail}")
+        raise
+    except Exception as e:
+        dm.append_event(s.id, f"Power: {labels[action]} failed: {e}")
+        raise
 
 
 @app.get("/api/servers/{sid}/stats")
 def server_stats(sid: int, db: Session = Depends(get_db), user: User = Depends(auth.get_current_user)):
     s = _server_for(db, sid, user)
-    return dm.stats(s.id)
+    return dm.stats(s.id, record=False)
 
 
 @app.get("/api/servers/{sid}/logs")
@@ -772,32 +890,58 @@ async def console_ws(websocket: WebSocket, sid: int, token: Optional[str] = None
             await websocket.close()
             return
         user = db.query(User).get(int(payload["sub"]))
-        if not user or (s.owner_id != user.id and not user.is_admin):
+        if not user:
             await websocket.send_json({"type": "error", "message": "forbidden"})
             await websocket.close()
             return
+        if s.owner_id != user.id and not user.is_admin:
+            su = db.query(Subuser).filter(Subuser.server_id == sid, Subuser.user_id == user.id).first()
+            if not su or "console" not in (su.permissions or "").split(","):
+                await websocket.send_json({"type": "error", "message": "forbidden"})
+                await websocket.close()
+                return
     finally:
         db.close()
 
-    stream = dm.attach_stream(sid)
-    if stream is None:
+    event_tail = dm.read_events(sid)
+    if event_tail:
+        await websocket.send_json({"type": "log", "data": event_tail})
+    event_offset = dm.event_log_size(sid)
+
+    if not dm.inspect(sid):
         await websocket.send_json({"type": "log", "data": "[container is not running]\n"})
 
-    async def pump_logs():
-        if stream is None:
-            return
-        loop = asyncio.get_event_loop()
+    async def pump_events():
+        nonlocal event_offset
         try:
             while True:
-                chunk = await loop.run_in_executor(None, lambda: next(stream, None))
-                if chunk is None:
-                    break
-                text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
-                await websocket.send_json({"type": "log", "data": text})
+                chunk, event_offset = dm.read_event_chunk(sid, event_offset)
+                if chunk:
+                    await websocket.send_json({"type": "log", "data": chunk})
+                await asyncio.sleep(0.5)
         except Exception:
             pass
 
-    log_task = asyncio.create_task(pump_logs())
+    async def pump_container_logs():
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                stream = dm.attach_stream(sid, tail=0, since=int(time.time()))
+                if stream is None:
+                    await asyncio.sleep(1.0)
+                    continue
+                while True:
+                    chunk = await loop.run_in_executor(None, lambda: next(stream, None))
+                    if chunk is None:
+                        break
+                    text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
+                    await websocket.send_json({"type": "log", "data": text})
+                await asyncio.sleep(0.5)
+        except Exception:
+            pass
+
+    event_task = asyncio.create_task(pump_events())
+    log_task = asyncio.create_task(pump_container_logs())
 
     try:
         while True:
@@ -807,10 +951,11 @@ async def console_ws(websocket: WebSocket, sid: int, token: Optional[str] = None
                 out = dm.exec_command(sid, cmd)
                 await websocket.send_json({"type": "log", "data": f"$ {cmd}\n{out}"})
             elif msg.get("type") == "stats":
-                await websocket.send_json({"type": "stats", "data": dm.stats(sid)})
+                await websocket.send_json({"type": "stats", "data": dm.stats(sid, record=False)})
     except WebSocketDisconnect:
         pass
     finally:
+        event_task.cancel()
         log_task.cancel()
 
 
@@ -1345,17 +1490,23 @@ def _website_git_sync(w: Website) -> str:
     repo = (w.git_repo or "").strip()
     if not repo:
         raise HTTPException(400, "Git repository is not configured for this site")
+    
+    if repo.startswith("-"):
+        raise HTTPException(400, "Invalid git repository URL")
 
     worktree = sfs.site_dir(w.id)
     branch = (w.git_branch or "").strip()
+    if branch.startswith("-"):
+        raise HTTPException(400, "Invalid git branch name")
+    
     messages = []
 
     if (worktree / ".git").exists():
         _, origin = _run_git(["config", "--get", "remote.origin.url"], worktree, check=False)
         if origin and origin.strip() != repo:
-            _run_git(["remote", "set-url", "origin", repo], worktree)
+            _run_git(["remote", "set-url", "origin", "--", repo], worktree)
         if branch:
-            messages.append(_run_git(["fetch", "origin", branch, "--prune"], worktree)[1])
+            messages.append(_run_git(["fetch", "origin", branch], worktree)[1])
             code, _ = _run_git(["checkout", branch], worktree, check=False)
             if code != 0:
                 _run_git(["checkout", "-b", branch, f"origin/{branch}"], worktree)
@@ -1375,7 +1526,7 @@ def _website_git_sync(w: Website) -> str:
         clone_args = ["clone"]
         if branch:
             clone_args += ["--branch", branch, "--single-branch"]
-        clone_args += [repo, "."]
+        clone_args += ["--", repo, "."]
         messages.append(_run_git(clone_args, worktree)[1])
 
     return "\n".join(m for m in messages if m).strip()

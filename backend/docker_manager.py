@@ -1,13 +1,18 @@
 """Обёртка над Docker SDK для управления контейнерами-"серверами"."""
 import os
 import shutil
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import docker
 from docker.errors import NotFound, APIError
 
 _disk_cache: dict = {}  # server_id -> (timestamp, size_bytes)
+_stats_history: dict[int, list[dict]] = {}
+_stats_lock = threading.Lock()
+_MAX_STATS_HISTORY = 30
 
 
 def _dir_size(path: Path) -> int:
@@ -57,6 +62,58 @@ def server_dir(server_id: int) -> Path:
     return p
 
 
+def event_log_path(server_id: int) -> Path:
+    p = server_dir(server_id) / ".panel"
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "console.log"
+
+
+def append_event(server_id: int, message: str):
+    try:
+        ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        lines = str(message or "").rstrip().splitlines() or [""]
+        with event_log_path(server_id).open("a", encoding="utf-8", newline="\n") as f:
+            for line in lines:
+                f.write(f"[{ts}] {line}\n")
+    except Exception:
+        pass
+
+
+def read_events(server_id: int, tail_bytes: int = 65536) -> str:
+    path = event_log_path(server_id)
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > tail_bytes:
+                f.seek(size - tail_bytes)
+            return f.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def event_log_size(server_id: int) -> int:
+    try:
+        return event_log_path(server_id).stat().st_size
+    except Exception:
+        return 0
+
+
+def read_event_chunk(server_id: int, offset: int) -> tuple[str, int]:
+    path = event_log_path(server_id)
+    try:
+        size = path.stat().st_size
+        if size < offset:
+            offset = 0
+        if size == offset:
+            return "", offset
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read(size - offset)
+        return data.decode("utf-8", errors="replace"), size
+    except Exception:
+        return "", offset
+
+
 def container_name(server_id: int) -> str:
     return f"panel_srv_{server_id}"
 
@@ -82,7 +139,9 @@ def create_container(server_id: int, image: str, cmd: str, memory_mb: int, cpu_p
     try:
         client().images.get(image)
     except NotFound:
+        append_event(server_id, f"Docker: image '{image}' not found locally, pulling...")
         client().images.pull(image)
+        append_event(server_id, f"Docker: image '{image}' pulled")
 
     host_dir = str(server_dir(server_id))
     cpu_quota = max(1000, int(cpu_percent * 1000))  # 100% = 100000
@@ -117,6 +176,7 @@ def create_container(server_id: int, image: str, cmd: str, memory_mb: int, cpu_p
         environment=env_dict,
         ports=port_bindings or None,
     )
+    append_event(server_id, f"Docker: container created from '{image}'")
     return c.id
 
 
@@ -142,37 +202,51 @@ def exec_resize(exec_id: str, rows: int, cols: int):
 def start(server_id: int):
     c = inspect(server_id)
     if c:
+        append_event(server_id, "Docker: starting container")
         c.start()
+        append_event(server_id, "Docker: start command sent")
 
 
 def stop(server_id: int):
     c = inspect(server_id)
     if c:
+        append_event(server_id, "Docker: stopping container")
         c.stop(timeout=10)
+        append_event(server_id, "Docker: container stopped")
 
 
 def restart(server_id: int):
     c = inspect(server_id)
     if c:
+        append_event(server_id, "Docker: restarting container")
         c.restart(timeout=10)
+        append_event(server_id, "Docker: restart command sent")
 
 
 def kill(server_id: int):
     c = inspect(server_id)
     if c:
         try:
+            append_event(server_id, "Docker: killing container")
             c.kill()
+            append_event(server_id, "Docker: kill command sent")
+        except APIError:
+            pass
+
+
+def remove_container(server_id: int):
+    c = inspect(server_id)
+    if c:
+        try:
+            append_event(server_id, "Docker: removing container")
+            c.remove(force=True)
+            append_event(server_id, "Docker: container removed")
         except APIError:
             pass
 
 
 def remove(server_id: int):
-    c = inspect(server_id)
-    if c:
-        try:
-            c.remove(force=True)
-        except APIError:
-            pass
+    remove_container(server_id)
     p = DATA_ROOT / f"srv_{server_id}"
     if p.exists():
         shutil.rmtree(p, ignore_errors=True)
@@ -209,15 +283,47 @@ def _uptime_seconds(c) -> int:
         return 0
 
 
-def stats(server_id: int) -> dict:
+def _record_stats_sample(server_id: int, data: dict):
+    sample = {
+        "t": time.time(),
+        "cpu": data.get("cpu", 0),
+        "mem": data.get("mem", 0),
+        "mem_limit": data.get("mem_limit", 0),
+        "disk": data.get("disk", 0),
+        "net_rx": data.get("net_rx", 0),
+        "net_tx": data.get("net_tx", 0),
+        "status": data.get("status", "offline"),
+        "uptime": data.get("uptime", 0),
+    }
+    with _stats_lock:
+        items = _stats_history.setdefault(server_id, [])
+        items.append(sample)
+        del items[:-_MAX_STATS_HISTORY]
+
+
+def stats_history(server_id: int) -> list[dict]:
+    with _stats_lock:
+        return [dict(x) for x in _stats_history.get(server_id, [])]
+
+
+def stats(server_id: int, record: bool = False) -> dict:
     c = inspect(server_id)
     disk = disk_usage(server_id)
     base = {"cpu": 0, "mem": 0, "mem_limit": 0, "disk": disk,
             "net_rx": 0, "net_tx": 0, "status": "offline", "uptime": 0}
     if not c:
+        if record:
+            _record_stats_sample(server_id, base)
+        base["history"] = stats_history(server_id)
         return base
     try:
         c.reload()
+        if c.status != "running":
+            base["status"] = c.status
+            if record:
+                _record_stats_sample(server_id, base)
+            base["history"] = stats_history(server_id)
+            return base
         uptime = _uptime_seconds(c) if c.status == "running" else 0
         s = c.stats(stream=False)
         cpu_delta = s["cpu_stats"]["cpu_usage"]["total_usage"] - s["precpu_stats"]["cpu_usage"]["total_usage"]
@@ -233,12 +339,19 @@ def stats(server_id: int) -> dict:
         for iface in (s.get("networks") or {}).values():
             net_rx += iface.get("rx_bytes", 0)
             net_tx += iface.get("tx_bytes", 0)
-        return {"cpu": round(cpu_pct, 2), "mem": mem, "mem_limit": mem_limit,
+        data = {"cpu": round(cpu_pct, 2), "mem": mem, "mem_limit": mem_limit,
                 "disk": disk, "net_rx": net_rx, "net_tx": net_tx,
                 "status": c.status, "uptime": uptime}
+        if record:
+            _record_stats_sample(server_id, data)
+        data["history"] = stats_history(server_id)
+        return data
     except Exception:
         base["status"] = c.status
         base["uptime"] = _uptime_seconds(c) if c.status == "running" else 0
+        if record:
+            _record_stats_sample(server_id, base)
+        base["history"] = stats_history(server_id)
         return base
 
 
@@ -263,9 +376,18 @@ def exec_command(server_id: int, cmd: str) -> str:
         return f"[exec error: {e}]"
 
 
-def attach_stream(server_id: int):
+def attach_stream(server_id: int, tail: int = 100, since: int | None = None):
     """Возвращает генератор вывода контейнера (stdout/stderr) для стрима логов."""
     c = inspect(server_id)
     if not c:
         return None
-    return c.logs(stream=True, follow=True, stdout=True, stderr=True, tail=100)
+    try:
+        c.reload()
+        if c.status != "running":
+            return None
+    except Exception:
+        return None
+    kwargs = {"stream": True, "follow": True, "stdout": True, "stderr": True, "tail": tail}
+    if since is not None:
+        kwargs["since"] = since
+    return c.logs(**kwargs)
