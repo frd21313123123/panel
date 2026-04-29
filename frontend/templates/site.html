@@ -131,7 +131,7 @@
             <h3 id="sslTitle" style="margin-bottom:6px">—</h3>
             <div id="sslInfo" class="muted" style="font-size:13px"></div>
           </div>
-          <button class="btn btn-primary" onclick="ssl()">Выпустить / обновить SSL</button>
+          <button class="btn btn-primary" id="btnSsl" onclick="ssl()">Выпустить / обновить SSL</button>
         </div>
         <hr>
         <div class="stat-grid">
@@ -193,7 +193,7 @@
             </div>
           </div>
           <div class="form-group">
-            <label>Папка с сайтом внутри репо (для static)</label>
+            <label>Папка с сайтом внутри репо (для static root)</label>
             <input name="web_subdir" placeholder="dist  или  backend/public">
           </div>
 
@@ -281,14 +281,18 @@ function buildNginxConfig(w) {
   const sslBlock = ssl ? `
     ssl_certificate /etc/letsencrypt/live/${w.domain}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${w.domain}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;` : "";
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;` : "";
+  const listenBlock = ssl
+    ? `${listen && listen !== 443 ? `listen ${listen};\n    ` : ""}listen 443 ssl http2;`
+    : `listen ${listen};`;
   return `server {
-    listen ${listen}${ssl ? " ssl http2" : ""};
+    ${listenBlock}
     server_name ${domains || "_"};
 ${sslBlock}
 
-    access_log /var/log/nginx/${w.domain || "site"}.access.log;
-    error_log /var/log/nginx/${w.domain || "site"}.error.log;
+    access_log /var/log/nginx/panel_${w.domain || "site"}.access.log;
+    error_log /var/log/nginx/panel_${w.domain || "site"}.error.log;
 
     location / {
     ${target}
@@ -413,7 +417,7 @@ async function rt(action) {
 }
 
 async function gitSync() {
-  if (!confirm("Обновить файлы сайта из Git? Локальные изменения будут перезаписаны.")) return;
+  if (!confirm("Обновить директорию сайта из Git? Локальные изменения будут перезаписаны.")) return;
   toast("git pull…","info");
   try { await api.post(`/api/websites/${SID}/git/sync`, {}); toast("Обновлено из Git","success"); load(); }
   catch (e) { toast(e.message,"error"); }
@@ -421,9 +425,29 @@ async function gitSync() {
 
 async function ssl() {
   if (!confirm("Запустить certbot? Домен должен резолвиться на этот сервер.")) return;
-  toast("Выпуск сертификата…","info");
-  try { await api.post(`/api/websites/${SID}/ssl`, {}); toast("SSL выпущен","success"); load(); }
-  catch (e) { toast(e.message,"error"); }
+  const btn = document.getElementById("btnSsl");
+  const oldText = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.textContent = "Выпускается SSL..."; }
+  document.getElementById("sslTitle").textContent = "Выпуск сертификата...";
+  document.getElementById("sslInfo").textContent = "Certbot проверяет домен и настраивает nginx. Обычно это занимает 10-30 секунд.";
+  const progress = toast("Выпуск сертификата... Подождите, страница обновится после завершения.", "info", 0);
+  try {
+    const r = await api.post(`/api/websites/${SID}/ssl`, {});
+    if (progress) progress.remove();
+    toast(r.message || "SSL выпущен", "success", 8000);
+    await load();
+    document.getElementById("sslTitle").textContent = "SSL active";
+    document.getElementById("sslInfo").textContent = "Сертификат выпущен и nginx перезагружен.";
+  }
+  catch (e) {
+    if (progress) progress.remove();
+    document.getElementById("sslTitle").textContent = "Ошибка выпуска SSL";
+    document.getElementById("sslInfo").textContent = e.message;
+    toast(e.message, "error", 10000);
+  }
+  finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldText || "Выпустить / обновить SSL"; }
+  }
 }
 
 async function reloadNginx() {

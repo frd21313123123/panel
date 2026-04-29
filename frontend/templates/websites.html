@@ -102,7 +102,7 @@ async function load() {
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           ${isStatic ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openFiles(${w.id})">📁 Файлы</button>` : ''}
-          ${isStatic && w.git_repo ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="gitSync(${w.id})" title="${esc(w.git_repo)}">⬇ Git pull</button>` : ''}
+          ${w.git_repo ? `<button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="gitSync(${w.id})" title="${esc(w.git_repo)}">⬇ Git pull</button>` : ''}
           <button class="btn btn-secondary" style="flex:1;min-width:90px" onclick="openEdit(${w.id})">✎ Изменить</button>
           <button class="btn btn-secondary" style="min-width:80px" onclick="toggle(${w.id})">${w.is_active ? '⏸' : '▶'}</button>
           ${!w.ssl_enabled ? `<button class="btn btn-secondary" style="min-width:80px" onclick="ssl(${w.id})">🔒 SSL</button>` : ''}
@@ -147,16 +147,16 @@ function formHtml(w) {
       </div>
       <div class="form-group" id="proxyGroup">
         <label>proxy_pass (только для proxy режима)</label>
-        <input name="proxy_pass" value="${esc(w.proxy_pass||'http://127.0.0.1:')}" placeholder="http://127.0.0.1:3000">
+        <input name="proxy_pass" value="${esc(w.proxy_pass||'')}" placeholder="http://127.0.0.1:3000">
       </div>
       <div class="form-group">
         <label>Дополнительные директивы nginx (опционально)</label>
         <textarea name="nginx_extra" rows="3" style="font-family:monospace;font-size:12px" placeholder="client_max_body_size 50m;">${esc(w.nginx_extra||'')}</textarea>
       </div>
       <div class="form-group">
-        <label>GitHub репозиторий (для static-сайтов)</label>
+        <label>GitHub репозиторий</label>
         <input name="git_repo" value="${esc(w.git_repo||'')}" placeholder="https://github.com/user/repo.git">
-        <div class="muted" style="font-size:11px;margin-top:4px">При создании сайта репозиторий будет склонирован в webroot. Кнопкой «Обновить из Git» — git pull.</div>
+        <div class="muted" style="font-size:11px;margin-top:4px">Для static репозиторий клонируется при создании. Для proxy используйте кнопку «Git pull» после создания сайта.</div>
       </div>
       <div class="form-group">
         <label>Ветка (опционально)</label>
@@ -325,9 +325,18 @@ async function gitSync(id) {
 
 async function ssl(id) {
   if (!confirm("Запустить certbot для SSL? Домен должен резолвиться на этот сервер.")) return;
-  toast("Выпуск сертификата…", "info");
-  try { await api.post(`/api/websites/${id}/ssl`); toast("SSL выпущен", "success"); load(); loadStatus(); }
-  catch (e) { toast(e.message, "error"); }
+  const progress = toast("Выпуск сертификата... Подождите, это может занять 10-30 секунд.", "info", 0);
+  try {
+    const r = await api.post(`/api/websites/${id}/ssl`);
+    if (progress) progress.remove();
+    toast(r.message || "SSL выпущен", "success", 8000);
+    load();
+    loadStatus();
+  }
+  catch (e) {
+    if (progress) progress.remove();
+    toast(e.message, "error", 10000);
+  }
 }
 
 function closeModal() { document.getElementById("modal").innerHTML = ""; }

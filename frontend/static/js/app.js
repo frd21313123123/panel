@@ -79,14 +79,15 @@ const api = {
   del(p) { return this.req(p, { method: "DELETE" }); },
 };
 
-function toast(msg, type = "info") {
+function toast(msg, type = "info", timeout = 3500) {
   let wrap = document.querySelector(".toast-wrap");
   if (!wrap) { wrap = document.createElement("div"); wrap.className = "toast-wrap"; document.body.appendChild(wrap); }
   const el = document.createElement("div");
   el.className = "toast " + type;
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  if (timeout > 0) setTimeout(() => el.remove(), timeout);
+  return el;
 }
 
 function fmtBytes(b) {
