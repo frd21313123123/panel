@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Автоматическая установка Panel на Ubuntu 24.04: Docker, Python, systemd, nginx и HTTPS.
+# Автоматическая установка и обновление Panel на Ubuntu 24.04.
 set -Eeuo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/panel}"
@@ -8,7 +8,12 @@ APP_PORT="${APP_PORT:-8080}"
 SITE_NAME="panel"
 PANEL_DOMAIN="${PANEL_DOMAIN:-}"
 PANEL_SSL_EMAIL="${PANEL_SSL_EMAIL:-}"
+PANEL_MODE="${PANEL_MODE:-${1:-install}}"
+PANEL_DOMAIN_WAS_SET=0
 HTTPS_ENABLED=0
+BACKUP_DIR=""
+
+[ -n "${PANEL_DOMAIN}" ] && PANEL_DOMAIN_WAS_SET=1
 
 if [ "$EUID" -ne 0 ]; then
   echo "Запустите от root: sudo ./install-ubuntu.sh"
@@ -30,6 +35,37 @@ case "${INSTALL_DIR}" in
     ;;
 esac
 
+usage() {
+  echo "Использование:"
+  echo "  sudo bash install.sh                 # установка"
+  echo "  sudo bash install.sh update          # обновление существующей панели"
+  echo ""
+  echo "Переменные:"
+  echo "  PANEL_DOMAIN=panel.example.com       # домен панели"
+  echo "  PANEL_SSL_EMAIL=admin@example.com    # email для Let's Encrypt"
+  echo "  INSTALL_DIR=/opt/panel               # путь установки"
+}
+
+normalize_mode() {
+  case "${PANEL_MODE}" in
+    install|--install|"")
+      PANEL_MODE="install"
+      ;;
+    update|--update|upgrade|--upgrade)
+      PANEL_MODE="update"
+      ;;
+    help|--help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "[!] Неизвестный режим: ${PANEL_MODE}"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
 normalize_domain() {
   local value="$1"
   value="${value#http://}"
@@ -46,6 +82,10 @@ is_valid_domain() {
 }
 
 ask_domain() {
+  if [ "${PANEL_MODE}" = "update" ] && [ -z "${PANEL_DOMAIN}" ]; then
+    PANEL_DOMAIN="$(read_existing_domain || true)"
+  fi
+
   if [ -n "${PANEL_DOMAIN}" ]; then
     PANEL_DOMAIN="$(normalize_domain "${PANEL_DOMAIN}")"
   elif [ -t 0 ]; then
@@ -64,8 +104,70 @@ ask_domain() {
   fi
 }
 
+read_existing_domain() {
+  local config_path="/etc/nginx/sites-available/${SITE_NAME}"
+  [ -f "${config_path}" ] || return 0
+
+  awk '
+    $1 == "server_name" {
+      value=$2
+      gsub(";", "", value)
+      if (value != "_" && value != "") {
+        print value
+        exit
+      }
+    }
+  ' "${config_path}"
+}
+
+read_existing_panel_secret() {
+  local service_path="/etc/systemd/system/panel.service"
+  [ -f "${service_path}" ] || return 0
+
+  awk -F= '
+    $1 == "Environment" && $2 == "PANEL_SECRET" {
+      print substr($0, index($0, "PANEL_SECRET=") + length("PANEL_SECRET="))
+      exit
+    }
+  ' "${service_path}"
+}
+
+existing_nginx_has_https() {
+  local config_path="/etc/nginx/sites-available/${SITE_NAME}"
+  [ -f "${config_path}" ] || return 1
+  grep -Eq 'listen[[:space:]]+443|ssl_certificate' "${config_path}"
+}
+
+detect_existing_install() {
+  [ -d "${INSTALL_DIR}/backend" ] || [ -f "/etc/systemd/system/panel.service" ]
+}
+
+maybe_switch_to_update() {
+  [ "${PANEL_MODE}" = "install" ] || return 0
+  detect_existing_install || return 0
+  [ -t 0 ] || return 0
+
+  local answer
+  read -r -p "Обнаружена установленная панель в ${INSTALL_DIR}. Обновить её вместо установки? [Y/n]: " answer
+  case "${answer}" in
+    n|N|no|NO|No)
+      PANEL_MODE="install"
+      ;;
+    *)
+      PANEL_MODE="update"
+      ;;
+  esac
+}
+
 ask_ssl_email() {
   [ -z "${PANEL_DOMAIN}" ] && return 0
+
+  if [ "${PANEL_MODE}" = "update" ] \
+    && [ "${PANEL_DOMAIN_WAS_SET}" != "1" ] \
+    && existing_nginx_has_https; then
+    HTTPS_ENABLED=1
+    return 0
+  fi
 
   if [ -n "${PANEL_SSL_EMAIL}" ]; then
     return 0
@@ -104,6 +206,37 @@ install_app_files() {
   chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
 }
 
+backup_current_install() {
+  detect_existing_install || {
+    echo "[!] Панель в ${INSTALL_DIR} не найдена. Сначала выполните установку."
+    exit 1
+  }
+
+  local timestamp
+  timestamp="$(date +%Y%m%d-%H%M%S)"
+  BACKUP_DIR="${INSTALL_DIR}/update-backups/${timestamp}"
+
+  echo "[+] Создание резервной копии текущей панели..."
+  mkdir -p "${BACKUP_DIR}"
+
+  [ -d "${INSTALL_DIR}/backend" ] && cp -a "${INSTALL_DIR}/backend" "${BACKUP_DIR}/backend"
+  [ -d "${INSTALL_DIR}/frontend" ] && cp -a "${INSTALL_DIR}/frontend" "${BACKUP_DIR}/frontend"
+  [ -f "${INSTALL_DIR}/panel.db" ] && cp -a "${INSTALL_DIR}/panel.db" "${BACKUP_DIR}/panel.db"
+  [ -f "/etc/systemd/system/panel.service" ] && cp -a "/etc/systemd/system/panel.service" "${BACKUP_DIR}/panel.service"
+  [ -f "/etc/nginx/sites-available/${SITE_NAME}" ] && cp -a "/etc/nginx/sites-available/${SITE_NAME}" "${BACKUP_DIR}/nginx-${SITE_NAME}.conf"
+
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/update-backups" 2>/dev/null || true
+}
+
+update_app_files() {
+  echo "[+] Обновление файлов панели в ${INSTALL_DIR}..."
+  mkdir -p "${INSTALL_DIR}"
+  rm -rf "${INSTALL_DIR}/backend" "${INSTALL_DIR}/frontend"
+  cp -a backend frontend "${INSTALL_DIR}/"
+  mkdir -p "${INSTALL_DIR}/data/servers" "${INSTALL_DIR}/data/backups"
+  chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}"
+}
+
 install_python_deps() {
   echo "[+] Установка зависимостей Python..."
   if [ ! -x "${INSTALL_DIR}/.venv/bin/python" ]; then
@@ -114,9 +247,10 @@ install_python_deps() {
 }
 
 install_systemd_service() {
-  echo "[+] Создание systemd-сервиса..."
+  echo "[+] Настройка systemd-сервиса..."
   local panel_secret
-  panel_secret="$(openssl rand -hex 32)"
+  panel_secret="$(read_existing_panel_secret || true)"
+  [ -n "${panel_secret}" ] || panel_secret="$(openssl rand -hex 32)"
 
   cat > /etc/systemd/system/panel.service <<EOF
 [Unit]
@@ -148,6 +282,22 @@ write_nginx_config() {
   echo "[+] Настройка nginx..."
   local server_name="_"
   [ -n "${PANEL_DOMAIN}" ] && server_name="${PANEL_DOMAIN}"
+
+  if [ "${PANEL_MODE}" = "update" ] \
+    && [ "${PANEL_DOMAIN_WAS_SET}" != "1" ] \
+    && [ -f "/etc/nginx/sites-available/${SITE_NAME}" ]; then
+    echo "[+] Существующий nginx-конфиг сохранён."
+    existing_nginx_has_https && HTTPS_ENABLED=1
+    cat > /etc/nginx/conf.d/panel_ws_map.conf <<'MAPEOF'
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+MAPEOF
+    nginx -t
+    systemctl reload nginx
+    return 0
+  fi
 
   cat > /etc/nginx/conf.d/panel_ws_map.conf <<'MAPEOF'
 map $http_upgrade $connection_upgrade {
@@ -214,10 +364,17 @@ print_result() {
   fi
 
   echo ""
-  echo "[✓] Установка завершена!"
+  if [ "${PANEL_MODE}" = "update" ]; then
+    echo "[✓] Обновление завершено!"
+  else
+    echo "[✓] Установка завершена!"
+  fi
   echo "    Панель: ${public_url}"
-  echo "    Логин по умолчанию: admin / admin"
-  echo "    Сразу смените пароль после первого входа."
+  if [ "${PANEL_MODE}" = "install" ]; then
+    echo "    Логин по умолчанию: admin / admin"
+    echo "    Сразу смените пароль после первого входа."
+  fi
+  [ -n "${BACKUP_DIR}" ] && echo "    Резервная копия: ${BACKUP_DIR}"
   echo ""
   echo "    Логи: journalctl -u panel -f"
   echo "    Перезапуск: systemctl restart panel"
@@ -231,13 +388,41 @@ print_result() {
   fi
 }
 
-ask_domain
-ask_ssl_email
-install_packages
-install_docker
-install_app_files
-install_python_deps
-install_systemd_service
-write_nginx_config
-install_https
-print_result
+run_install() {
+  ask_domain
+  ask_ssl_email
+  install_packages
+  install_docker
+  install_app_files
+  install_python_deps
+  install_systemd_service
+  write_nginx_config
+  install_https
+  print_result
+}
+
+run_update() {
+  ask_domain
+  ask_ssl_email
+  install_packages
+  install_docker
+  echo "[+] Проверка пользователя ${SERVICE_USER}..."
+  id -u "${SERVICE_USER}" >/dev/null 2>&1 || useradd -r -s /bin/bash -m -d "${INSTALL_DIR}" "${SERVICE_USER}"
+  usermod -aG docker "${SERVICE_USER}"
+  backup_current_install
+  update_app_files
+  install_python_deps
+  install_systemd_service
+  write_nginx_config
+  install_https
+  print_result
+}
+
+normalize_mode
+maybe_switch_to_update
+
+if [ "${PANEL_MODE}" = "update" ]; then
+  run_update
+else
+  run_install
+fi

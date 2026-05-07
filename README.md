@@ -60,6 +60,25 @@ sudo env PANEL_DOMAIN=panel.example.com PANEL_SSL_EMAIL=admin@example.com bash i
 
 Если оставить домен пустым, панель будет доступна по IP сервера без автоматического HTTPS.
 
+## Обновление установленной панели
+
+Запустите из папки с новой версией панели:
+```bash
+sudo bash install.sh update
+```
+
+Обновление:
+- сохраняет `panel.db`, `data/servers`, `data/backups` и текущий `PANEL_SECRET`
+- делает резервную копию старых `backend`, `frontend`, базы и конфигов в `/opt/panel/update-backups/`
+- обновляет Python-зависимости
+- перезапускает `panel.service`
+- сохраняет существующий nginx/HTTPS-конфиг, если домен не передан заново
+
+Чтобы явно сменить домен при обновлении:
+```bash
+sudo env PANEL_DOMAIN=new-panel.example.com PANEL_SSL_EMAIL=admin@example.com bash install.sh update
+```
+
 ## Переменные окружения
 
 | Переменная | По умолчанию | Назначение |

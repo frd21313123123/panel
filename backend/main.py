@@ -25,6 +25,7 @@ import sites_files as sfs
 import site_runtime as srt
 import backups as bk
 import scheduler
+import system_monitor as mon
 import tasks as tk
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -261,6 +262,11 @@ def server_page(request: Request, sid: int):
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
+
+
+@app.get("/monitoring", response_class=HTMLResponse)
+def monitoring_page(request: Request):
+    return templates.TemplateResponse("monitoring.html", {"request": request})
 
 
 @app.get("/profile", response_class=HTMLResponse)
@@ -867,6 +873,48 @@ def system_info(_: User = Depends(auth.get_current_user)):
             })
         except Exception as e:
             info["error"] = str(e)
+    return info
+
+
+@app.get("/api/monitoring")
+def monitoring_info(db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):
+    info = mon.collect(BASE_DIR, dm.DATA_ROOT)
+
+    docker_info = {"available": dm.docker_available()}
+    if docker_info["available"]:
+        try:
+            d = dm.client().info()
+            docker_info.update({
+                "containers": d.get("Containers", 0),
+                "containers_running": d.get("ContainersRunning", 0),
+                "containers_paused": d.get("ContainersPaused", 0),
+                "containers_stopped": d.get("ContainersStopped", 0),
+                "images": d.get("Images", 0),
+                "server_version": d.get("ServerVersion", ""),
+                "kernel": d.get("KernelVersion", ""),
+                "os": d.get("OperatingSystem", ""),
+                "architecture": d.get("Architecture", ""),
+            })
+        except Exception as e:
+            docker_info["error"] = str(e)
+
+    status_counts: dict[str, int] = {}
+    servers = db.query(Server).all()
+    for s in servers:
+        try:
+            s.status = dm.status(s.id)
+        except Exception:
+            s.status = s.status or "offline"
+        status_counts[s.status] = status_counts.get(s.status, 0) + 1
+    db.commit()
+
+    info["docker"] = docker_info
+    info["panel"] = {
+        "servers_total": len(servers),
+        "servers_by_status": status_counts,
+        "users_total": db.query(User).count(),
+        "eggs_total": db.query(Egg).count(),
+    }
     return info
 
 
