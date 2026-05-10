@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel — Мониторинг</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="logo">⚡ Panel</div>
+    <nav>
+      <a href="/dashboard">📦 Мои серверы</a>
+      <a href="/websites">🌐 Сайты &amp; Nginx</a>
+      <a href="/monitoring">📈 Мониторинг</a>
+      <a href="/admin">⚙️ Администрирование</a>
+      <a href="/profile">👤 Профиль</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="user">загрузка…</div>
+    <button class="btn btn-secondary" style="margin-top:8px" onclick="logout()">Выйти</button>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>Мониторинг сервера</h1>
+        <div class="muted" style="font-size:13px;margin-top:4px">Общее состояние хоста, Docker и панели</div>
+      </div>
+      <div class="muted" id="updatedAt" style="font-size:12px;white-space:nowrap">загрузка…</div>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat"><div class="label">CPU</div><div class="value" id="cpuValue">—</div></div>
+      <div class="stat"><div class="label">Ядра заняты</div><div class="value" id="coreValue">—</div></div>
+      <div class="stat"><div class="label">ОЗУ</div><div class="value" id="memValue">—</div></div>
+      <div class="stat"><div class="label">Хранилище</div><div class="value" id="diskValue">—</div></div>
+      <div class="stat"><div class="label">Сеть</div><div class="value" id="netValue" style="font-size:14px">—</div></div>
+      <div class="stat"><div class="label">Uptime</div><div class="value" id="uptimeValue" style="font-size:15px">—</div></div>
+    </div>
+
+    <div class="monitor-grid">
+      <div class="card">
+        <div class="monitor-card-head">
+          <div>
+            <h3>Ресурсы всего сервера</h3>
+            <div class="muted" style="font-size:12px">Текущая загрузка CPU, памяти и хранилища хоста</div>
+          </div>
+        </div>
+        <div class="resource-donut-grid">
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="cpuDonut"></canvas>
+              <div class="donut-center"><strong id="cpuDonutText">—</strong><span>CPU</span></div>
+            </div>
+            <div class="donut-caption" id="cpuCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="memDonut"></canvas>
+              <div class="donut-center"><strong id="memDonutText">—</strong><span>ОЗУ</span></div>
+            </div>
+            <div class="donut-caption" id="memCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="swapDonut"></canvas>
+              <div class="donut-center"><strong id="swapDonutText">—</strong><span>Swap</span></div>
+            </div>
+            <div class="donut-caption" id="swapCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="diskDonut"></canvas>
+              <div class="donut-center"><strong id="diskDonutText">—</strong><span>Диск</span></div>
+            </div>
+            <div class="donut-caption" id="diskCaption">—</div>
+          </div>
+        </div>
+        <div class="core-panel">
+          <div class="core-panel-head">
+            <div>
+              <h4>Загрузка по ядрам</h4>
+              <div class="muted" style="font-size:12px">Показывает занятость CPU на уровне всего сервера</div>
+            </div>
+            <strong id="coreSummary">—</strong>
+          </div>
+          <div id="coreGrid" class="core-grid"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px">Динамика</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Последние замеры CPU, ОЗУ и хранилища</div>
+        <div class="monitor-chart-wrap"><canvas id="resourceChart"></canvas></div>
+        <div class="meter-list">
+          <div class="meter-row">
+            <span>CPU</span><strong id="cpuText">—</strong>
+            <div class="meter-track"><div id="cpuBar" class="meter-bar accent"></div></div>
+          </div>
+          <div class="meter-row">
+            <span>ОЗУ</span><strong id="memText">—</strong>
+            <div class="meter-track"><div id="memBar" class="meter-bar green"></div></div>
+          </div>
+          <div class="meter-row">
+            <span>Хранилище</span><strong id="dataDiskText">—</strong>
+            <div class="meter-track"><div id="diskBar" class="meter-bar yellow"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="monitor-grid">
+      <div class="card">
+        <h3 style="margin-bottom:4px">Docker и панель</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Контейнеры, шаблоны и пользователи панели</div>
+        <div id="dockerBox" class="muted">загрузка…</div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px">Диски</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Разделы, на которых расположены панель и данные серверов</div>
+        <div id="diskBox" class="muted">загрузка…</div>
+      </div>
+    </div>
+    <div class="monitor-grid">
+      <div class="card">
+        <h3 style="margin-bottom:4px">Хост</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Системная информация сервера</div>
+        <div id="hostBox" class="muted">загрузка…</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/static/js/app.js"></script>
+<script>
+loadSidebar("/monitoring");
+
+const MAX_POINTS = 30;
+let resourceChart = null;
+const donutCharts = {};
+
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function pct(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(1) + " %" : "—"; }
+function pctNum(v) { const n = Number(v); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0; }
+function fmtTime(sec) {
+  sec = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d}д ${h}ч ${m}м`;
+  if (h) return `${h}ч ${m}м`;
+  return `${m}м`;
+}
+function setBar(id, value) {
+  document.getElementById(id).style.width = pctNum(value) + "%";
+}
+
+function initChart() {
+  const ctx = document.getElementById("resourceChart");
+  resourceChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: Array(MAX_POINTS).fill(""),
+      datasets: [
+        { label: "CPU", data: Array(MAX_POINTS).fill(null), borderColor: "#a855f7", backgroundColor: "#a855f722", borderWidth: 2, fill: true, tension: .3, pointRadius: 0 },
+        { label: "ОЗУ", data: Array(MAX_POINTS).fill(null), borderColor: "#22c55e", backgroundColor: "#22c55e18", borderWidth: 2, fill: true, tension: .3, pointRadius: 0 },
+        { label: "Диск", data: Array(MAX_POINTS).fill(null), borderColor: "#f59e0b", backgroundColor: "#f59e0b18", borderWidth: 2, fill: true, tension: .3, pointRadius: 0 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { labels: { color: "#cbd5e1", boxWidth: 10 } }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false },
+        y: { beginAtZero: true, suggestedMax: 100, ticks: { color: "#8a97a5", callback: v => v + "%" }, grid: { color: "#2d3843" } },
+      },
+    },
+  });
+}
+
+function initDonut(id, color, softColor) {
+  const ctx = document.getElementById(id);
+  donutCharts[id] = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: ["Занято", "Свободно"],
+      datasets: [{
+        data: [0, 100],
+        backgroundColor: [color, softColor],
+        borderWidth: 0,
+        hoverOffset: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "74%",
+      animation: { duration: 240 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false },
+      },
+    },
+  });
+}
+
+function updateDonut(id, value) {
+  const chart = donutCharts[id];
+  if (!chart) return;
+  const used = pctNum(value);
+  chart.data.datasets[0].data = [used, Math.max(0, 100 - used)];
+  chart.update("none");
+}
+
+function pushChart(cpu, mem, disk) {
+  if (!resourceChart) return;
+  [cpu, mem, disk].forEach((value, idx) => {
+    const ds = resourceChart.data.datasets[idx].data;
+    ds.push(value);
+    ds.shift();
+  });
+  resourceChart.update("none");
+}
+
+function renderCores(cpu) {
+  const cores = Array.isArray(cpu?.per_core) ? cpu.per_core : [];
+  const grid = document.getElementById("coreGrid");
+  const total = Number(cpu?.count || cores.length || 0);
+  const used = Number(cpu?.used_cores || 0);
+  document.getElementById("coreSummary").textContent = total ? `${used.toFixed(1)} / ${total}` : "—";
+  if (!cores.length) {
+    grid.innerHTML = `<div class="muted" style="font-size:13px">Данные по ядрам появятся после следующего замера.</div>`;
+    return;
+  }
+  grid.innerHTML = cores.map((value, idx) => `
+    <div class="core-tile">
+      <div class="core-tile-top"><span>CPU ${idx + 1}</span><strong>${pct(value)}</strong></div>
+      <div class="meter-track"><div class="meter-bar blue" style="width:${pctNum(value)}%"></div></div>
+    </div>`).join("");
+}
+
+function renderDocker(d) {
+  const docker = d.docker || {};
+  const panel = d.panel || {};
+  if (!docker.available) {
+    document.getElementById("dockerBox").innerHTML =
+      `<div style="background:rgba(239,68,68,.1);border:1px solid var(--red);border-radius:6px;padding:14px;color:var(--red)">
+        <strong>Docker недоступен</strong><br><span style="font-size:13px">Контейнеры не смогут запускаться, пока Docker daemon не отвечает.</span>
+      </div>`;
+    return;
+  }
+  const statuses = Object.entries(panel.servers_by_status || {})
+    .map(([k, v]) => `<span class="pill ${escapeHtml(k)}">${escapeHtml(k)}: ${v}</span>`).join(" ");
+  document.getElementById("dockerBox").innerHTML = `
+    <div class="stat-grid">
+      <div class="stat"><div class="label">Контейнеры</div><div class="value">${docker.containers_running || 0}<span class="muted" style="font-size:13px"> / ${docker.containers || 0}</span></div></div>
+      <div class="stat"><div class="label">Образы</div><div class="value">${docker.images || 0}</div></div>
+      <div class="stat"><div class="label">Серверы панели</div><div class="value">${panel.servers_total || 0}</div></div>
+      <div class="stat"><div class="label">Пользователи</div><div class="value">${panel.users_total || 0}</div></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">${statuses || '<span class="muted">Серверов пока нет</span>'}</div>
+    <table style="margin-top:14px">
+      <tbody>
+        <tr><th>Docker</th><td>${escapeHtml(docker.server_version || "—")}</td></tr>
+        <tr><th>OS Docker</th><td>${escapeHtml(docker.os || "—")}</td></tr>
+        <tr><th>Kernel</th><td>${escapeHtml(docker.kernel || "—")}</td></tr>
+        <tr><th>Архитектура</th><td>${escapeHtml(docker.architecture || "—")}</td></tr>
+      </tbody>
+    </table>`;
+}
+
+function renderDisks(disks) {
+  document.getElementById("diskBox").innerHTML = (disks || []).map(d => `
+    <div class="disk-row">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+        <div>
+          <div style="font-weight:700">${escapeHtml(d.label)}</div>
+          <div class="muted" style="font-size:12px;word-break:break-all">${escapeHtml(d.path)}</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap">
+          <div style="font-weight:700">${pct(d.percent)}</div>
+          <div class="muted" style="font-size:12px">${fmtBytes(d.used)} / ${fmtBytes(d.total)}</div>
+        </div>
+      </div>
+      <div class="meter-track" style="margin-top:9px"><div class="meter-bar yellow" style="width:${pctNum(d.percent)}%"></div></div>
+    </div>`).join("");
+}
+
+function renderHost(host) {
+  const load = Array.isArray(host.load_average) ? host.load_average.join(" / ") : "—";
+  document.getElementById("hostBox").innerHTML = `
+    <table>
+      <tbody>
+        <tr><th>Hostname</th><td>${escapeHtml(host.hostname || "—")}</td></tr>
+        <tr><th>Платформа</th><td>${escapeHtml(host.platform || "—")}</td></tr>
+        <tr><th>CPU ядер</th><td>${host.cpu_count || 0}</td></tr>
+        <tr><th>Load average</th><td>${escapeHtml(load)}</td></tr>
+        <tr><th>Процессы</th><td>${host.processes ?? "—"}</td></tr>
+        <tr><th>Python</th><td>${escapeHtml(host.python || "—")}</td></tr>
+      </tbody>
+    </table>`;
+}
+
+async function loadMonitoring() {
+  try {
+    const d = await api.get("/api/monitoring");
+    const dataDisk = d.storage || (d.disks || [])[0] || {};
+    const cpu = d.cpu?.percent;
+    const mem = d.memory?.percent;
+    const swap = d.swap?.percent;
+    const disk = dataDisk.percent;
+
+    document.getElementById("cpuValue").textContent = pct(cpu);
+    document.getElementById("coreValue").textContent = d.cpu?.count ? `${Number(d.cpu?.used_cores || 0).toFixed(1)} / ${d.cpu.count}` : "—";
+    document.getElementById("memValue").textContent = pct(mem);
+    document.getElementById("diskValue").textContent = pct(disk);
+    document.getElementById("netValue").textContent = `${fmtBytes(d.network?.rx_rate || 0)}/s ↓ · ${fmtBytes(d.network?.tx_rate || 0)}/s ↑`;
+    document.getElementById("uptimeValue").textContent = fmtTime(d.host?.uptime || 0);
+    document.getElementById("updatedAt").textContent = "обновлено " + new Date((d.timestamp || Date.now()/1000) * 1000).toLocaleTimeString();
+
+    document.getElementById("cpuDonutText").textContent = pct(cpu);
+    document.getElementById("cpuCaption").textContent = d.cpu?.count ? `${Number(d.cpu?.used_cores || 0).toFixed(1)} из ${d.cpu.count} ядер занято` : "CPU хоста";
+    document.getElementById("memDonutText").textContent = pct(mem);
+    document.getElementById("memCaption").textContent = `${fmtBytes(d.memory?.used || 0)} / ${fmtBytes(d.memory?.total || 0)}`;
+    document.getElementById("swapDonutText").textContent = pct(swap);
+    document.getElementById("swapCaption").textContent = d.swap?.total ? `${fmtBytes(d.swap?.used || 0)} / ${fmtBytes(d.swap?.total || 0)}` : "Swap не настроен";
+    document.getElementById("diskDonutText").textContent = pct(disk);
+    document.getElementById("diskCaption").textContent = `${fmtBytes(dataDisk.used || 0)} / ${fmtBytes(dataDisk.total || 0)}`;
+    updateDonut("cpuDonut", cpu);
+    updateDonut("memDonut", mem);
+    updateDonut("swapDonut", swap);
+    updateDonut("diskDonut", disk);
+    renderCores(d.cpu || {});
+
+    document.getElementById("cpuText").textContent = pct(cpu);
+    document.getElementById("memText").textContent = `${fmtBytes(d.memory?.used || 0)} / ${fmtBytes(d.memory?.total || 0)} · ${pct(mem)}`;
+    document.getElementById("dataDiskText").textContent = `${fmtBytes(dataDisk.used || 0)} / ${fmtBytes(dataDisk.total || 0)} · ${pct(disk)}`;
+    setBar("cpuBar", cpu);
+    setBar("memBar", mem);
+    setBar("diskBar", disk);
+    pushChart(pctNum(cpu), pctNum(mem), pctNum(disk));
+
+    renderDocker(d);
+    renderDisks(d.disks || []);
+    renderHost(d.host || {});
+  } catch (e) {
+    toast(e.message, "error");
+  }
+}
+
+initDonut("cpuDonut", "#38bdf8", "rgba(56,189,248,.12)");
+initDonut("memDonut", "#22c55e", "rgba(34,197,94,.12)");
+initDonut("swapDonut", "#f59e0b", "rgba(245,158,11,.12)");
+initDonut("diskDonut", "#a855f7", "rgba(168,85,247,.12)");
+initChart();
+loadMonitoring();
+setInterval(loadMonitoring, 2000);
+</script>
+</body>
+</html>

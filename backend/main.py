@@ -25,6 +25,7 @@ import sites_files as sfs
 import site_runtime as srt
 import backups as bk
 import scheduler
+import system_monitor as mon
 import tasks as tk
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -261,6 +262,11 @@ def server_page(request: Request, sid: int):
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
     return templates.TemplateResponse("admin.html", {"request": request})
+
+
+@app.get("/monitoring", response_class=HTMLResponse)
+def monitoring_page(request: Request):
+    return templates.TemplateResponse("monitoring.html", {"request": request})
 
 
 @app.get("/profile", response_class=HTMLResponse)
@@ -870,6 +876,48 @@ def system_info(_: User = Depends(auth.get_current_user)):
     return info
 
 
+@app.get("/api/monitoring")
+def monitoring_info(db: Session = Depends(get_db), _: User = Depends(auth.require_admin)):
+    info = mon.collect(BASE_DIR, dm.DATA_ROOT)
+
+    docker_info = {"available": dm.docker_available()}
+    if docker_info["available"]:
+        try:
+            d = dm.client().info()
+            docker_info.update({
+                "containers": d.get("Containers", 0),
+                "containers_running": d.get("ContainersRunning", 0),
+                "containers_paused": d.get("ContainersPaused", 0),
+                "containers_stopped": d.get("ContainersStopped", 0),
+                "images": d.get("Images", 0),
+                "server_version": d.get("ServerVersion", ""),
+                "kernel": d.get("KernelVersion", ""),
+                "os": d.get("OperatingSystem", ""),
+                "architecture": d.get("Architecture", ""),
+            })
+        except Exception as e:
+            docker_info["error"] = str(e)
+
+    status_counts: dict[str, int] = {}
+    servers = db.query(Server).all()
+    for s in servers:
+        try:
+            s.status = dm.status(s.id)
+        except Exception:
+            s.status = s.status or "offline"
+        status_counts[s.status] = status_counts.get(s.status, 0) + 1
+    db.commit()
+
+    info["docker"] = docker_info
+    info["panel"] = {
+        "servers_total": len(servers),
+        "servers_by_status": status_counts,
+        "users_total": db.query(User).count(),
+        "eggs_total": db.query(Egg).count(),
+    }
+    return info
+
+
 # ---------- WebSocket консоль ----------
 @app.websocket("/ws/servers/{sid}/console")
 async def console_ws(websocket: WebSocket, sid: int, token: Optional[str] = None):
@@ -1237,6 +1285,31 @@ def _split_domains(text: str) -> list[str]:
     return [d.strip() for d in text.replace(",", " ").split() if d.strip()]
 
 
+def _validate_listen_port(value: int | None) -> int:
+    try:
+        port = int(value or 80)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "listen_port must be a number")
+    if port < 1 or port > 65535:
+        raise HTTPException(400, "listen_port must be between 1 and 65535")
+    return port
+
+
+def _validate_website_values(mode: str, proxy_pass: str, listen_port: int | None) -> tuple[str, str, int]:
+    mode = mode or "proxy"
+    if mode not in ("proxy", "static"):
+        raise HTTPException(400, "mode must be proxy|static")
+    port = _validate_listen_port(listen_port)
+    if mode == "proxy":
+        try:
+            proxy_pass = nm.normalize_proxy_pass(proxy_pass)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    else:
+        proxy_pass = ""
+    return mode, proxy_pass, port
+
+
 def _website_dto(w: Website) -> dict:
     return {
         "id": w.id, "name": w.name, "domain": w.domain,
@@ -1292,6 +1365,8 @@ def _apply_website(w: Website):
         ok, msg = nm.reload_nginx()
         if not ok:
             raise HTTPException(400, f"nginx reload failed: {msg}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except RuntimeError as e:
         raise HTTPException(500, str(e))
 
@@ -1305,13 +1380,14 @@ def list_websites(db: Session = Depends(get_db), _: User = Depends(auth.require_
 @app.post("/api/websites")
 def create_website(body: WebsiteIn, db: Session = Depends(get_db), _: User = Depends(auth.require_admin),
                    __=Depends(_require_flag("experimental_websites"))):
-    if body.mode not in ("proxy", "static"):
-        raise HTTPException(400, "mode must be proxy|static")
-    if body.mode == "proxy" and not body.proxy_pass:
-        raise HTTPException(400, "proxy_pass required for proxy mode")
     if db.query(Website).filter(Website.domain == body.domain).first():
         raise HTTPException(400, "Domain already exists")
     data = body.model_dump()
+    data["mode"], data["proxy_pass"], data["listen_port"] = _validate_website_values(
+        data.get("mode") or "proxy",
+        data.get("proxy_pass") or "",
+        data.get("listen_port") or 80,
+    )
     data["domains"] = ",".join(body.domains or [])
     w = Website(**data)
     db.add(w)
@@ -1359,6 +1435,14 @@ def update_website(wid: int, body: WebsiteUpdate, db: Session = Depends(get_db),
             raise HTTPException(400, "Domain already exists")
     if "domains" in data:
         data["domains"] = ",".join(data["domains"] or [])
+    new_mode = data.get("mode", w.mode or "proxy")
+    new_proxy_pass = data.get("proxy_pass", w.proxy_pass or "")
+    new_listen_port = data.get("listen_port", w.listen_port or 80)
+    data["mode"], data["proxy_pass"], data["listen_port"] = _validate_website_values(
+        new_mode,
+        new_proxy_pass,
+        new_listen_port,
+    )
     for k, v in data.items():
         setattr(w, k, v)
     db.commit()
@@ -1479,14 +1563,11 @@ def website_issue_ssl(wid: int, db: Session = Depends(get_db), _: User = Depends
     w.ssl_enabled = True
     db.commit()
     _apply_website(w)
-    return {"ok": True, "message": msg}
+    return {"ok": True, "message": "SSL выпущен и nginx перезагружен", "certbot_output": msg}
 
 
 def _website_git_sync(w: Website) -> str:
-    """Clone (if empty) or pull (if already a git repo) into the site webroot.
-    Returns combined git output. Static-mode only."""
-    if (w.mode or "proxy") != "static":
-        raise HTTPException(400, "Git sync is only available for static sites")
+    """Clone or pull the configured repository into the site's directory."""
     repo = (w.git_repo or "").strip()
     if not repo:
         raise HTTPException(400, "Git repository is not configured for this site")

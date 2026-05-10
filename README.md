@@ -34,7 +34,7 @@ run.bat
 ## Установка на Ubuntu 24.04 (production)
 
 ```bash
-sudo ./install-ubuntu.sh
+sudo bash install.sh
 ```
 
 Скрипт:
@@ -43,12 +43,40 @@ sudo ./install-ubuntu.sh
 - копирует файлы в `/opt/panel`
 - настраивает systemd-сервис `panel.service`
 - генерирует `PANEL_SECRET`
+- спрашивает домен для панели и подставляет его в nginx
+- при указанном email автоматически выпускает HTTPS-сертификат Let's Encrypt
 
 Управление:
 ```bash
 systemctl status panel
 systemctl restart panel
 journalctl -u panel -f
+```
+
+Для автоматической установки без вопросов можно передать переменные:
+```bash
+sudo env PANEL_DOMAIN=panel.example.com PANEL_SSL_EMAIL=admin@example.com bash install.sh
+```
+
+Если оставить домен пустым, панель будет доступна по IP сервера без автоматического HTTPS.
+
+## Обновление установленной панели
+
+Запустите из папки с новой версией панели:
+```bash
+sudo bash install.sh update
+```
+
+Обновление:
+- сохраняет `panel.db`, `data/servers`, `data/backups` и текущий `PANEL_SECRET`
+- делает резервную копию старых `backend`, `frontend`, базы и конфигов в `/opt/panel/update-backups/`
+- обновляет Python-зависимости
+- перезапускает `panel.service`
+- сохраняет существующий nginx/HTTPS-конфиг, если домен не передан заново
+
+Чтобы явно сменить домен при обновлении:
+```bash
+sudo env PANEL_DOMAIN=new-panel.example.com PANEL_SSL_EMAIL=admin@example.com bash install.sh update
 ```
 
 ## Переменные окружения
@@ -76,6 +104,7 @@ panel/
       css/style.css      Тёмная тема
       js/app.js          API-клиент
   run.bat / run.sh       Запуск для разработки
+  install.sh             Быстрый запуск production-установщика
   install-ubuntu.sh      Установщик для Ubuntu 24
 ```
 
@@ -84,7 +113,7 @@ panel/
 В production обязательно:
 - Сменить пароль `admin` сразу после первого входа
 - Поставить `PANEL_SECRET` через окружение (install-ubuntu.sh делает автоматически)
-- Поставить reverse-proxy (nginx + TLS) перед панелью
+- Использовать домен с HTTPS (install-ubuntu.sh может настроить nginx + Let's Encrypt автоматически)
 - Ограничить доступ к Docker-сокету только пользователю `panel`
 
 ## Расширение

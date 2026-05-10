@@ -1,7 +1,9 @@
 """Nginx config management — writes/removes site configs and reloads nginx."""
 import os
+import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SITES_AVAILABLE = Path("/etc/nginx/sites-available")
 SITES_ENABLED = Path("/etc/nginx/sites-enabled")
@@ -9,6 +11,39 @@ SITES_ENABLED = Path("/etc/nginx/sites-enabled")
 
 def _config_name(website_id: int) -> str:
     return f"panel_site_{website_id}"
+
+
+def _validate_port(port: int, field: str = "port") -> int:
+    try:
+        value = int(port)
+    except (TypeError, ValueError):
+        raise ValueError(f"{field} must be a number")
+    if value < 1 or value > 65535:
+        raise ValueError(f"{field} must be between 1 and 65535")
+    return value
+
+
+def normalize_proxy_pass(proxy_pass: str) -> str:
+    """Return a safe nginx proxy_pass target or raise ValueError."""
+    value = (proxy_pass or "").strip()
+    if not value:
+        raise ValueError("proxy_pass required for proxy mode")
+    if re.search(r'[\{\}\n;]', value):
+        raise ValueError("Invalid characters in proxy_pass")
+
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("proxy_pass must start with http:// or https://")
+    if not parsed.netloc:
+        raise ValueError("proxy_pass must include a host")
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("proxy_pass has an invalid port")
+    if port is None:
+        raise ValueError("proxy_pass must include a port, for example http://127.0.0.1:3000")
+    _validate_port(port, "proxy_pass port")
+    return value
 
 
 def generate_config(
@@ -21,8 +56,8 @@ def generate_config(
     listen_port: int = 80,
     webroot: str = "",
 ) -> str:
-    import re
-    for val in [domain, proxy_pass, webroot] + (extra_domains or []):
+    listen_port = _validate_port(listen_port, "listen_port")
+    for val in [domain, webroot] + (extra_domains or []):
         if val and re.search(r'[\{\}\n;]', str(val)):
             raise ValueError("Invalid characters in configuration values")
     
@@ -49,7 +84,7 @@ def generate_config(
     if ssl:
         if listen_port and listen_port != 443:
             listen_lines.append(f"listen {listen_port};")
-        listen_lines.append("listen 443 ssl;")
+        listen_lines.append("listen 443 ssl http2;")
     else:
         listen_lines.append(f"listen {listen_port};")
     listen_block = "\n    ".join(listen_lines)
@@ -76,7 +111,7 @@ def generate_config(
     }}
 """
     else:
-        target = proxy_pass or "http://127.0.0.1:80"
+        target = normalize_proxy_pass(proxy_pass)
         location_block = f"""
     location / {{
         proxy_pass {target};
@@ -207,12 +242,18 @@ def issue_ssl(domain: str) -> tuple[bool, str]:
     """Issue Let's Encrypt cert via certbot."""
     try:
         r = subprocess.run(
-            _sudo(["certbot", "--nginx", "-d", domain, "--non-interactive", "--agree-tos", "-m", "admin@panel.local"]),
+            _sudo([
+                "certbot", "--nginx", "-d", domain,
+                "--non-interactive", "--agree-tos", "--no-eff-email",
+                "-m", "admin@panel.local",
+            ]),
             capture_output=True, text=True, timeout=120,
         )
         output = (r.stdout + r.stderr).strip()
         return r.returncode == 0, output
     except FileNotFoundError:
         return False, "certbot not found — install it: apt install certbot python3-certbot-nginx"
+    except subprocess.TimeoutExpired:
+        return False, "certbot did not finish within 120 seconds. Check DNS for the domain and try again."
     except Exception as e:
         return False, str(e)

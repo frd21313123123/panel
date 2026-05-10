@@ -79,19 +79,20 @@ const api = {
   del(p) { return this.req(p, { method: "DELETE" }); },
 };
 
-function toast(msg, type = "info") {
+function toast(msg, type = "info", timeout = 3500) {
   let wrap = document.querySelector(".toast-wrap");
   if (!wrap) { wrap = document.createElement("div"); wrap.className = "toast-wrap"; document.body.appendChild(wrap); }
   const el = document.createElement("div");
   el.className = "toast " + type;
   el.textContent = msg;
   wrap.appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  if (timeout > 0) setTimeout(() => el.remove(), timeout);
+  return el;
 }
 
 function fmtBytes(b) {
   if (!b) return "0 B";
-  const u = ["B", "KB", "MB", "GB"]; let i = 0;
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"]; let i = 0;
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return b.toFixed(1) + " " + u[i];
 }
@@ -105,6 +106,8 @@ async function loadSidebar(active) {
     if (!me.is_admin) {
       const a = document.querySelector('.sidebar a[href="/admin"]');
       if (a) a.style.display = "none";
+      const monitoring = document.querySelector('.sidebar a[href="/monitoring"]');
+      if (monitoring) monitoring.style.display = "none";
     }
     try {
       const flags = await api.get("/api/settings/public");
@@ -128,6 +131,7 @@ async function logout() {
 const UI_ICON_PATHS = {
   panel: '<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>',
   servers: '<rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
+  monitor: '<path d="M3 12h4l3-8 4 16 3-8h4"/><path d="M3 21h18"/>',
   globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
   settings: '<path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5z"/><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2.1 2.1 0 1 1-2.97 2.97l-.05-.05a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21a2.1 2.1 0 1 1-4.2 0v-.08a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.05.05a2.1 2.1 0 1 1-2.97-2.97l.05-.05A1.8 1.8 0 0 0 4.6 15a1.8 1.8 0 0 0-1.66-1.1H3a2.1 2.1 0 1 1 0-4.2h.08A1.8 1.8 0 0 0 4.74 8.6a1.8 1.8 0 0 0-.36-1.98l-.05-.05A2.1 2.1 0 1 1 7.3 3.6l.05.05a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 10.42 2.35V2a2.1 2.1 0 1 1 4.2 0v.08a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.05-.05a2.1 2.1 0 1 1 2.97 2.97l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.66 1.1H22a2.1 2.1 0 1 1 0 4.2h-.08A1.8 1.8 0 0 0 19.4 15z"/>',
   user: '<path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>',
@@ -156,6 +160,7 @@ function stripDecorativePrefix(text) {
 function navIconForHref(href) {
   if (href === "/dashboard") return "servers";
   if (href === "/websites") return "globe";
+  if (href === "/monitoring") return "monitor";
   if (href === "/admin") return "settings";
   if (href === "/profile") return "user";
   return "files";
