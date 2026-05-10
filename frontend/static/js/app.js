@@ -92,7 +92,7 @@ function toast(msg, type = "info", timeout = 3500) {
 
 function fmtBytes(b) {
   if (!b) return "0 B";
-  const u = ["B", "KB", "MB", "GB"]; let i = 0;
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"]; let i = 0;
   while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
   return b.toFixed(1) + " " + u[i];
 }

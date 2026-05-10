@@ -32,10 +32,10 @@
 
     <div class="stat-grid">
       <div class="stat"><div class="label">CPU</div><div class="value" id="cpuValue">—</div></div>
+      <div class="stat"><div class="label">Ядра заняты</div><div class="value" id="coreValue">—</div></div>
       <div class="stat"><div class="label">ОЗУ</div><div class="value" id="memValue">—</div></div>
-      <div class="stat"><div class="label">Диск данных</div><div class="value" id="diskValue">—</div></div>
+      <div class="stat"><div class="label">Хранилище</div><div class="value" id="diskValue">—</div></div>
       <div class="stat"><div class="label">Сеть</div><div class="value" id="netValue" style="font-size:14px">—</div></div>
-      <div class="stat"><div class="label">Docker</div><div class="value" id="dockerValue">—</div></div>
       <div class="stat"><div class="label">Uptime</div><div class="value" id="uptimeValue" style="font-size:15px">—</div></div>
     </div>
 
@@ -43,10 +43,55 @@
       <div class="card">
         <div class="monitor-card-head">
           <div>
-            <h3>Ресурсы хоста</h3>
-            <div class="muted" style="font-size:12px">CPU, память, диск и сетевой трафик</div>
+            <h3>Ресурсы всего сервера</h3>
+            <div class="muted" style="font-size:12px">Текущая загрузка CPU, памяти и хранилища хоста</div>
           </div>
         </div>
+        <div class="resource-donut-grid">
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="cpuDonut"></canvas>
+              <div class="donut-center"><strong id="cpuDonutText">—</strong><span>CPU</span></div>
+            </div>
+            <div class="donut-caption" id="cpuCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="memDonut"></canvas>
+              <div class="donut-center"><strong id="memDonutText">—</strong><span>ОЗУ</span></div>
+            </div>
+            <div class="donut-caption" id="memCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="swapDonut"></canvas>
+              <div class="donut-center"><strong id="swapDonutText">—</strong><span>Swap</span></div>
+            </div>
+            <div class="donut-caption" id="swapCaption">—</div>
+          </div>
+          <div class="donut-card">
+            <div class="donut-wrap">
+              <canvas id="diskDonut"></canvas>
+              <div class="donut-center"><strong id="diskDonutText">—</strong><span>Диск</span></div>
+            </div>
+            <div class="donut-caption" id="diskCaption">—</div>
+          </div>
+        </div>
+        <div class="core-panel">
+          <div class="core-panel-head">
+            <div>
+              <h4>Загрузка по ядрам</h4>
+              <div class="muted" style="font-size:12px">Показывает занятость CPU на уровне всего сервера</div>
+            </div>
+            <strong id="coreSummary">—</strong>
+          </div>
+          <div id="coreGrid" class="core-grid"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px">Динамика</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Последние замеры CPU, ОЗУ и хранилища</div>
         <div class="monitor-chart-wrap"><canvas id="resourceChart"></canvas></div>
         <div class="meter-list">
           <div class="meter-row">
@@ -58,26 +103,27 @@
             <div class="meter-track"><div id="memBar" class="meter-bar green"></div></div>
           </div>
           <div class="meter-row">
-            <span>Данные серверов</span><strong id="dataDiskText">—</strong>
+            <span>Хранилище</span><strong id="dataDiskText">—</strong>
             <div class="meter-track"><div id="diskBar" class="meter-bar yellow"></div></div>
           </div>
         </div>
-      </div>
-
-      <div class="card">
-        <h3 style="margin-bottom:4px">Docker и панель</h3>
-        <div class="muted" style="font-size:12px;margin-bottom:14px">Контейнеры, шаблоны и пользователи панели</div>
-        <div id="dockerBox" class="muted">загрузка…</div>
       </div>
     </div>
 
     <div class="monitor-grid">
       <div class="card">
+        <h3 style="margin-bottom:4px">Docker и панель</h3>
+        <div class="muted" style="font-size:12px;margin-bottom:14px">Контейнеры, шаблоны и пользователи панели</div>
+        <div id="dockerBox" class="muted">загрузка…</div>
+      </div>
+
+      <div class="card">
         <h3 style="margin-bottom:4px">Диски</h3>
         <div class="muted" style="font-size:12px;margin-bottom:14px">Разделы, на которых расположены панель и данные серверов</div>
         <div id="diskBox" class="muted">загрузка…</div>
       </div>
-
+    </div>
+    <div class="monitor-grid">
       <div class="card">
         <h3 style="margin-bottom:4px">Хост</h3>
         <div class="muted" style="font-size:12px;margin-bottom:14px">Системная информация сервера</div>
@@ -93,6 +139,7 @@ loadSidebar("/monitoring");
 
 const MAX_POINTS = 30;
 let resourceChart = null;
+const donutCharts = {};
 
 function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function pct(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(1) + " %" : "—"; }
@@ -133,6 +180,40 @@ function initChart() {
   });
 }
 
+function initDonut(id, color, softColor) {
+  const ctx = document.getElementById(id);
+  donutCharts[id] = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels: ["Занято", "Свободно"],
+      datasets: [{
+        data: [0, 100],
+        backgroundColor: [color, softColor],
+        borderWidth: 0,
+        hoverOffset: 0,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: "74%",
+      animation: { duration: 240 },
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: false },
+      },
+    },
+  });
+}
+
+function updateDonut(id, value) {
+  const chart = donutCharts[id];
+  if (!chart) return;
+  const used = pctNum(value);
+  chart.data.datasets[0].data = [used, Math.max(0, 100 - used)];
+  chart.update("none");
+}
+
 function pushChart(cpu, mem, disk) {
   if (!resourceChart) return;
   [cpu, mem, disk].forEach((value, idx) => {
@@ -141,6 +222,23 @@ function pushChart(cpu, mem, disk) {
     ds.shift();
   });
   resourceChart.update("none");
+}
+
+function renderCores(cpu) {
+  const cores = Array.isArray(cpu?.per_core) ? cpu.per_core : [];
+  const grid = document.getElementById("coreGrid");
+  const total = Number(cpu?.count || cores.length || 0);
+  const used = Number(cpu?.used_cores || 0);
+  document.getElementById("coreSummary").textContent = total ? `${used.toFixed(1)} / ${total}` : "—";
+  if (!cores.length) {
+    grid.innerHTML = `<div class="muted" style="font-size:13px">Данные по ядрам появятся после следующего замера.</div>`;
+    return;
+  }
+  grid.innerHTML = cores.map((value, idx) => `
+    <div class="core-tile">
+      <div class="core-tile-top"><span>CPU ${idx + 1}</span><strong>${pct(value)}</strong></div>
+      <div class="meter-track"><div class="meter-bar blue" style="width:${pctNum(value)}%"></div></div>
+    </div>`).join("");
 }
 
 function renderDocker(d) {
@@ -208,18 +306,33 @@ function renderHost(host) {
 async function loadMonitoring() {
   try {
     const d = await api.get("/api/monitoring");
-    const dataDisk = (d.disks || [])[1] || (d.disks || [])[0] || {};
+    const dataDisk = d.storage || (d.disks || [])[0] || {};
     const cpu = d.cpu?.percent;
     const mem = d.memory?.percent;
+    const swap = d.swap?.percent;
     const disk = dataDisk.percent;
 
     document.getElementById("cpuValue").textContent = pct(cpu);
+    document.getElementById("coreValue").textContent = d.cpu?.count ? `${Number(d.cpu?.used_cores || 0).toFixed(1)} / ${d.cpu.count}` : "—";
     document.getElementById("memValue").textContent = pct(mem);
     document.getElementById("diskValue").textContent = pct(disk);
     document.getElementById("netValue").textContent = `${fmtBytes(d.network?.rx_rate || 0)}/s ↓ · ${fmtBytes(d.network?.tx_rate || 0)}/s ↑`;
-    document.getElementById("dockerValue").textContent = d.docker?.available ? `${d.docker.containers_running || 0} online` : "offline";
     document.getElementById("uptimeValue").textContent = fmtTime(d.host?.uptime || 0);
     document.getElementById("updatedAt").textContent = "обновлено " + new Date((d.timestamp || Date.now()/1000) * 1000).toLocaleTimeString();
+
+    document.getElementById("cpuDonutText").textContent = pct(cpu);
+    document.getElementById("cpuCaption").textContent = d.cpu?.count ? `${Number(d.cpu?.used_cores || 0).toFixed(1)} из ${d.cpu.count} ядер занято` : "CPU хоста";
+    document.getElementById("memDonutText").textContent = pct(mem);
+    document.getElementById("memCaption").textContent = `${fmtBytes(d.memory?.used || 0)} / ${fmtBytes(d.memory?.total || 0)}`;
+    document.getElementById("swapDonutText").textContent = pct(swap);
+    document.getElementById("swapCaption").textContent = d.swap?.total ? `${fmtBytes(d.swap?.used || 0)} / ${fmtBytes(d.swap?.total || 0)}` : "Swap не настроен";
+    document.getElementById("diskDonutText").textContent = pct(disk);
+    document.getElementById("diskCaption").textContent = `${fmtBytes(dataDisk.used || 0)} / ${fmtBytes(dataDisk.total || 0)}`;
+    updateDonut("cpuDonut", cpu);
+    updateDonut("memDonut", mem);
+    updateDonut("swapDonut", swap);
+    updateDonut("diskDonut", disk);
+    renderCores(d.cpu || {});
 
     document.getElementById("cpuText").textContent = pct(cpu);
     document.getElementById("memText").textContent = `${fmtBytes(d.memory?.used || 0)} / ${fmtBytes(d.memory?.total || 0)} · ${pct(mem)}`;
@@ -237,6 +350,10 @@ async function loadMonitoring() {
   }
 }
 
+initDonut("cpuDonut", "#38bdf8", "rgba(56,189,248,.12)");
+initDonut("memDonut", "#22c55e", "rgba(34,197,94,.12)");
+initDonut("swapDonut", "#f59e0b", "rgba(245,158,11,.12)");
+initDonut("diskDonut", "#a855f7", "rgba(168,85,247,.12)");
 initChart();
 loadMonitoring();
 setInterval(loadMonitoring, 2000);

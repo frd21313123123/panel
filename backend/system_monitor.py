@@ -14,6 +14,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 
 _last_cpu: Optional[tuple[float, float]] = None
+_last_cpu_cores: Optional[list[tuple[float, float]]] = None
 _last_net: Optional[tuple[float, int, int]] = None
 
 
@@ -51,6 +52,28 @@ def _proc_cpu_times() -> Optional[tuple[float, float]]:
     return sum(fields), idle
 
 
+def _proc_cpu_core_times() -> list[tuple[float, float]]:
+    cores: list[tuple[float, float]] = []
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return cores
+
+    for line in lines:
+        if not line.startswith("cpu") or line.startswith("cpu "):
+            continue
+        name, *raw_fields = line.split()
+        if not name[3:].isdigit():
+            continue
+        fields = [float(x) for x in raw_fields]
+        if len(fields) < 4:
+            continue
+        idle = fields[3] + (fields[4] if len(fields) > 4 else 0.0)
+        cores.append((sum(fields), idle))
+    return cores
+
+
 def _cpu_percent() -> Optional[float]:
     global _last_cpu
     if psutil:
@@ -73,6 +96,33 @@ def _cpu_percent() -> Optional[float]:
     if total_delta <= 0:
         return 0.0
     return round(max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0)), 1)
+
+
+def _cpu_per_core() -> list[float]:
+    global _last_cpu_cores
+    if psutil:
+        try:
+            return [round(float(x), 1) for x in psutil.cpu_percent(interval=None, percpu=True)]
+        except Exception:
+            pass
+
+    current = _proc_cpu_core_times()
+    if not current:
+        return []
+    if _last_cpu_cores is None or len(_last_cpu_cores) != len(current):
+        _last_cpu_cores = current
+        return []
+
+    out: list[float] = []
+    for (total, idle), (prev_total, prev_idle) in zip(current, _last_cpu_cores):
+        total_delta = total - prev_total
+        idle_delta = idle - prev_idle
+        if total_delta <= 0:
+            out.append(0.0)
+        else:
+            out.append(round(max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0)), 1))
+    _last_cpu_cores = current
+    return out
 
 
 def _memory() -> dict:
@@ -131,6 +181,24 @@ def _disk(path: Path, label: str) -> dict:
         }
     except OSError:
         return {"label": label, "path": str(path), "total": 0, "used": 0, "free": 0, "percent": 0.0}
+
+
+def _host_storage_path(base_dir: Path) -> Path:
+    if os.name == "nt":
+        return Path(base_dir.anchor or "C:\\")
+    return Path("/")
+
+
+def _unique_disks(items: list[dict]) -> list[dict]:
+    seen: set[tuple[int, int, int]] = set()
+    out: list[dict] = []
+    for item in items:
+        key = (int(item.get("total") or 0), int(item.get("used") or 0), int(item.get("free") or 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _net_totals() -> tuple[int, int]:
@@ -225,6 +293,17 @@ def _process_count() -> Optional[int]:
 def collect(base_dir: Path, data_root: Path) -> dict:
     boot = _boot_time()
     now = int(time.time())
+    cpu_count = os.cpu_count() or 0
+    cpu_percent = _cpu_percent()
+    cpu_cores = _cpu_per_core()
+    if cpu_percent is None and cpu_cores:
+        cpu_percent = round(sum(cpu_cores) / len(cpu_cores), 1)
+    storage = _disk(_host_storage_path(base_dir), "Хранилище сервера")
+    disks = _unique_disks([
+        storage,
+        _disk(base_dir.resolve(), "Панель"),
+        _disk(data_root.resolve(), "Данные серверов"),
+    ])
     return {
         "timestamp": now,
         "host": {
@@ -233,18 +312,21 @@ def collect(base_dir: Path, data_root: Path) -> dict:
             "release": platform.release(),
             "platform": platform.platform(),
             "python": platform.python_version(),
-            "cpu_count": os.cpu_count() or 0,
+            "cpu_count": cpu_count,
             "load_average": _load_average(),
             "boot_time": boot,
             "uptime": max(0, now - boot) if boot else None,
             "processes": _process_count(),
         },
-        "cpu": {"percent": _cpu_percent(), "count": os.cpu_count() or 0},
+        "cpu": {
+            "percent": cpu_percent,
+            "count": cpu_count,
+            "used_cores": round((cpu_percent or 0.0) * cpu_count / 100.0, 2) if cpu_count else 0.0,
+            "per_core": cpu_cores,
+        },
         "memory": _memory(),
         "swap": _swap(),
         "network": _network(),
-        "disks": [
-            _disk(base_dir.resolve(), "Панель"),
-            _disk(data_root.resolve(), "Данные серверов"),
-        ],
+        "storage": storage,
+        "disks": disks,
     }
